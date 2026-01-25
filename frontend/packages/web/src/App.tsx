@@ -203,7 +203,7 @@ export default function App() {
   const [permissionMode, setPermissionMode] = useState("default");
   const [model, setModel] = useState("");
   const [variant, setVariant] = useState("");
-  const [sessionId, setSessionId] = useState("demo-session");
+  const [sessionId, setSessionId] = useState("");
   const [sessionError, setSessionError] = useState<string | null>(null);
 
   const [message, setMessage] = useState("");
@@ -839,7 +839,7 @@ export default function App() {
             <div className="panel-header-left">
               <MessageSquare className="button-icon" />
               <span className="panel-title">Session</span>
-              <span className="session-id-display">{sessionId}</span>
+              {sessionId && <span className="session-id-display">{sessionId}</span>}
             </div>
             {polling && (
               <span className="pill accent">Live</span>
@@ -847,7 +847,15 @@ export default function App() {
           </div>
 
           <div className="messages-container">
-            {transcriptMessages.length === 0 && !sessionError ? (
+            {!sessionId ? (
+              <div className="empty-state">
+                <MessageSquare className="empty-state-icon" />
+                <div className="empty-state-title">No Session Selected</div>
+                <p className="empty-state-text">
+                  Click + in the sidebar to create a new session, or select an existing one.
+                </p>
+              </div>
+            ) : transcriptMessages.length === 0 && !sessionError ? (
               <div className="empty-state">
                 <Terminal className="empty-state-icon" />
                 <div className="empty-state-title">Ready to Chat</div>
@@ -884,13 +892,14 @@ export default function App() {
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Send a message..."
+                placeholder={sessionId ? "Send a message..." : "Select or create a session first"}
                 rows={1}
+                disabled={!sessionId}
               />
               <button
                 className="send-button"
                 onClick={sendMessage}
-                disabled={!message.trim()}
+                disabled={!sessionId || !message.trim()}
               >
                 <Send />
               </button>
