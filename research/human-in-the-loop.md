@@ -17,25 +17,46 @@ Comparison of how each coding agent handles interactive permission and question 
 
 OpenCode is the only agent with a fully interactive bidirectional HITL protocol. It emits events that require explicit responses via dedicated API endpoints.
 
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/question` | List pending question requests |
+| POST | `/question/{requestID}/reply` | Answer a question |
+| POST | `/question/{requestID}/reject` | Reject a question |
+| GET | `/permission` | List pending permission requests |
+| POST | `/permission/{requestID}/reply` | Respond to permission |
+
 ### Permission Requests
 
 ```typescript
 interface PermissionRequest {
-  id: string;
-  sessionID: string;
-  permission: string;     // e.g., "file:write"
-  patterns: string[];     // Affected paths
+  id: string;            // Pattern: ^per.*
+  sessionID: string;     // Pattern: ^ses.*
+  permission: string;    // e.g., "file:write"
+  patterns: string[];    // Affected paths
   metadata: Record<string, unknown>;
-  always: string[];       // "Always allow" options
+  always: string[];      // "Always allow" options
   tool?: { messageID: string; callID: string };
 }
 ```
 
-**Responding:**
+**API: Reply to Permission**
+```
+POST /permission/{requestID}/reply
+Content-Type: application/json
+
+{
+  "reply": "once" | "always" | "reject",
+  "message": "optional reason"
+}
+```
+
+**SDK Usage:**
 ```typescript
-await clientV2.permission.reply({
-  requestID: requestId,
-  reply: "once" | "always" | "reject"
+await client.permission.reply({
+  path: { requestID: "per_abc123" },
+  body: { reply: "once" }
 });
 ```
 
@@ -43,8 +64,8 @@ await clientV2.permission.reply({
 
 ```typescript
 interface QuestionRequest {
-  id: string;
-  sessionID: string;
+  id: string;            // Pattern: ^que.*
+  sessionID: string;     // Pattern: ^ses.*
   questions: Array<{
     header?: string;
     question: string;
@@ -53,26 +74,51 @@ interface QuestionRequest {
   }>;
   tool?: { messageID: string; callID: string };
 }
+
+// Answer type: array of selected option labels
+type QuestionAnswer = string[];
 ```
 
-**Responding:**
+**API: Reply to Question**
+```
+POST /question/{requestID}/reply
+Content-Type: application/json
+
+{
+  "answers": [["Option A"], ["Option B", "Option C"]]
+}
+```
+
+Each element in `answers` corresponds to a question (in order). Each answer is an array of selected option labels.
+
+**API: Reject Question**
+```
+POST /question/{requestID}/reject
+```
+
+**SDK Usage:**
 ```typescript
-// Reply with selected options
-await clientV2.question.reply({
-  requestID: requestId,
-  answers: [["selected option"]]  // Array of selected labels per question
+// Reply with answers
+await client.question.reply({
+  path: { requestID: "que_abc123" },
+  body: { answers: [["Yes"]] }
 });
 
 // Or reject
-await clientV2.question.reject({ requestID: requestId });
+await client.question.reject({
+  path: { requestID: "que_abc123" }
+});
 ```
 
-### Event Types
+### SSE Event Types
 
 | Event | Description |
 |-------|-------------|
 | `permission.asked` | Agent requesting permission for an action |
+| `permission.replied` | Permission response recorded |
 | `question.asked` | Agent asking user a question with options |
+| `question.replied` | Question answered |
+| `question.rejected` | Question rejected by user |
 
 ---
 
