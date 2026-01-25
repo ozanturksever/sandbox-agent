@@ -8,5 +8,11 @@ RUN pnpm build
 
 FROM caddy:alpine
 COPY --from=build /app/dist /srv
-COPY Caddyfile /etc/caddy/Caddyfile
+RUN cat > /etc/caddy/Caddyfile <<'EOF'
+:80 {
+	root * /srv
+	file_server
+	try_files {path} /index.html
+}
+EOF
 EXPOSE 80
