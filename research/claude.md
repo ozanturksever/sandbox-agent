@@ -1,0 +1,171 @@
+# Claude Code Research
+
+Research notes on Claude Code's configuration, credential discovery, and runtime behavior based on agent-jj implementation.
+
+## Overview
+
+- **Provider**: Anthropic
+- **Execution Method**: CLI subprocess (`claude` command)
+- **Session Persistence**: Session ID (string)
+- **SDK**: None (spawns CLI directly)
+
+## Credential Discovery
+
+### Priority Order
+
+1. User-configured credentials (passed as `ANTHROPIC_API_KEY` env var)
+2. Environment variables: `ANTHROPIC_API_KEY` or `CLAUDE_API_KEY`
+3. Bootstrap extraction from config files
+4. OAuth fallback (Claude CLI handles internally)
+
+### Config File Locations
+
+| Path | Description |
+|------|-------------|
+| `~/.claude.json.api` | API key config (highest priority) |
+| `~/.claude.json` | General config |
+| `~/.claude.json.nathan` | User-specific backup (custom) |
+| `~/.claude/.credentials.json` | OAuth credentials |
+| `~/.claude-oauth-credentials.json` | Docker mount alternative for OAuth |
+
+### API Key Field Names (checked in order)
+
+```json
+{
+  "primaryApiKey": "sk-ant-...",
+  "apiKey": "sk-ant-...",
+  "anthropicApiKey": "sk-ant-...",
+  "customApiKey": "sk-ant-..."
+}
+```
+
+Keys must start with `sk-ant-` prefix to be valid.
+
+### OAuth Structure
+
+```json
+// ~/.claude/.credentials.json
+{
+  "claudeAiOauth": {
+    "accessToken": "...",
+    "expiresAt": "2024-01-01T00:00:00Z"
+  }
+}
+```
+
+OAuth tokens are validated for expiry before use.
+
+## CLI Invocation
+
+### Command Structure
+
+```bash
+claude \
+  --print \
+  --output-format stream-json \
+  --verbose \
+  --dangerously-skip-permissions \
+  [--resume SESSION_ID] \
+  [--model MODEL_ID] \
+  [--permission-mode plan] \
+  "PROMPT"
+```
+
+### Arguments
+
+| Flag | Description |
+|------|-------------|
+| `--print` | Output mode |
+| `--output-format stream-json` | Newline-delimited JSON streaming |
+| `--verbose` | Verbose output |
+| `--dangerously-skip-permissions` | Skip permission prompts |
+| `--resume SESSION_ID` | Resume existing session |
+| `--model MODEL_ID` | Specify model (e.g., `claude-sonnet-4-20250514`) |
+| `--permission-mode plan` | Plan mode (read-only exploration) |
+
+### Environment Variables
+
+Only `ANTHROPIC_API_KEY` is passed if an API key is found. If no key is found, Claude CLI uses its built-in OAuth flow from `~/.claude/.credentials.json`.
+
+## Streaming Response Format
+
+Claude CLI outputs newline-delimited JSON events:
+
+```json
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "..."}]}}
+{"type": "tool_use", "tool_use": {"name": "Read", "input": {...}}}
+{"type": "result", "result": "Final response text", "session_id": "abc123"}
+```
+
+### Event Types
+
+| Type | Description |
+|------|-------------|
+| `assistant` | Assistant message with content blocks |
+| `tool_use` | Tool invocation |
+| `tool_result` | Tool result (may include `is_error`) |
+| `result` | Final result with session ID |
+
+### Content Block Types
+
+```typescript
+{
+  type: "text" | "tool_use";
+  text?: string;
+  name?: string;      // tool name
+  input?: object;     // tool input
+}
+```
+
+## Response Schema
+
+```typescript
+// ClaudeCliResponseSchema
+{
+  result?: string;           // Final response text
+  session_id?: string;       // Session ID for resumption
+  structured_output?: unknown; // Optional structured output
+  error?: unknown;           // Error information
+}
+```
+
+## Session Management
+
+- Session ID is captured from streaming events (`event.session_id`)
+- Use `--resume SESSION_ID` to continue a session
+- Sessions are stored internally by Claude CLI
+
+## Timeout
+
+- Default timeout: 5 minutes (300,000 ms)
+- Process is killed with `SIGTERM` on timeout
+
+## Agent Modes
+
+| Mode | Behavior |
+|------|----------|
+| `build` | Default execution mode |
+| `plan` | Adds `--permission-mode plan` flag |
+| `chat` | Available but no special handling |
+
+## Error Handling
+
+- Non-zero exit codes result in errors
+- stderr is captured and included in error messages
+- Spawn errors are caught separately
+
+## Conversion to Universal Format
+
+Claude output is converted via `convertClaudeOutput()`:
+
+1. If response is a string, wrap as assistant message
+2. If response is object with `result` field, extract content
+3. Parse with `ClaudeCliResponseSchema` as fallback
+4. Extract `structured_output` as metadata if present
+
+## Notes
+
+- Claude CLI manages its own OAuth refresh internally
+- No SDK dependency - direct CLI subprocess
+- stdin is closed immediately after spawn
+- Working directory is set via `cwd` option on spawn
