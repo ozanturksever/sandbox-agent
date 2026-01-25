@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use sandbox_daemon::agents::{AgentId, AgentManager, InstallOptions, SpawnOptions};
-use sandbox_daemon::credentials::{extract_all_credentials, CredentialExtractionOptions};
+use sandbox_daemon_core::agents::{AgentId, AgentManager, InstallOptions, SpawnOptions};
+use sandbox_daemon_core::credentials::{extract_all_credentials, CredentialExtractionOptions};
 
 fn build_env() -> HashMap<String, String> {
     let options = CredentialExtractionOptions::new();

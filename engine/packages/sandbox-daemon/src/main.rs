@@ -3,12 +3,12 @@ use std::io::Write;
 use clap::{Args, Parser, Subcommand};
 use reqwest::blocking::Client as HttpClient;
 use reqwest::Method;
-use sandbox_daemon::router::{
+use sandbox_daemon_core::router::{
     AgentInstallRequest, AppState, AuthConfig, CreateSessionRequest, MessageRequest,
     PermissionReply, PermissionReplyRequest, QuestionReplyRequest,
 };
-use sandbox_daemon::router::{AgentListResponse, AgentModesResponse, CreateSessionResponse, EventsResponse};
-use sandbox_daemon::router::build_router;
+use sandbox_daemon_core::router::{AgentListResponse, AgentModesResponse, CreateSessionResponse, EventsResponse};
+use sandbox_daemon_core::router::build_router;
 use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;

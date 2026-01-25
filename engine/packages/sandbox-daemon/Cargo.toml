@@ -1,7 +1,11 @@
 [package]
-name = "sandbox-daemon"
+name = "sandbox-daemon-core"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "sandbox-daemon"
+path = "src/main.rs"
 
 [dependencies]
 thiserror = "1.0"
@@ -10,7 +14,7 @@ serde_json = "1.0"
 axum = "0.7"
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3"
-error = { path = "../error" }
+sandbox-daemon-error = { path = "../error" }
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"] }
 flate2 = "1.0"
 tar = "0.4"

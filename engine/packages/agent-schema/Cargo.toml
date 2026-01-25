@@ -1,5 +1,5 @@
 [package]
-name = "agent-schema"
+name = "sandbox-daemon-agent-schema"
 version = "0.1.0"
 edition = "2021"
 

@@ -1,5 +1,5 @@
 [package]
-name = "openapi-gen"
+name = "sandbox-daemon-openapi-gen"
 version = "0.1.0"
 edition = "2021"
 build = "build.rs"
@@ -7,6 +7,6 @@ build = "build.rs"
 [dependencies]
 
 [build-dependencies]
-sandbox-daemon = { path = "../sandbox-daemon" }
+sandbox-daemon-core = { path = "../sandbox-daemon" }
 serde_json = "1.0"
 utoipa = "4.2"

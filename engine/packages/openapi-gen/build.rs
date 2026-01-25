@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use sandbox_daemon::router::ApiDoc;
+use sandbox_daemon_core::router::ApiDoc;
 use utoipa::OpenApi;
 
 fn main() {

@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response, Sse};
 use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
-use error::{AgentError as AgentErrorPayload, ProblemDetails, SandboxError};
+use sandbox_daemon_error::{AgentError as AgentErrorPayload, ProblemDetails, SandboxError};
 use futures::stream;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
