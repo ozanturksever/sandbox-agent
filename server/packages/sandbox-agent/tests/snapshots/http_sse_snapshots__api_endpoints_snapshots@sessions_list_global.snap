@@ -3,4 +3,4 @@ source: server/packages/sandbox-agent/tests/http_sse_snapshots.rs
 expression: normalize_sessions(&sessions)
 ---
 hasExpectedFields: true
-sessionCount: 2
+sessionCount: 1
