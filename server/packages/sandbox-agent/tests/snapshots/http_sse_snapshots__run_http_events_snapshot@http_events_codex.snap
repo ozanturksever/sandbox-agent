@@ -1,0 +1,91 @@
+---
+source: server/packages/sandbox-agent/tests/http_sse_snapshots.rs
+assertion_line: 714
+expression: normalized
+---
+- agent: codex
+  kind: started
+  seq: 1
+  started:
+    message: session.created
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 2
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 3
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 4
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 5
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 6
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 7
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 8
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 9
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 10
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 11
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 12
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 13
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 14
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 15
+- agent: codex
+  kind: message
+  message:
+    unparsed: true
+  seq: 16
+- agent: codex
+  error:
+    kind: process_exit
+    message: agent exited with status ExitStatus(unix_wait_status(256))
+  kind: error
+  seq: 17

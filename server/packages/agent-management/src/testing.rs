@@ -252,7 +252,22 @@ fn handle_health_response(
     if status.is_success() {
         return Ok(());
     }
-    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+    // 401 always means invalid credentials
+    if status == StatusCode::UNAUTHORIZED {
+        return Err(TestAgentConfigError::InvalidCredentials {
+            provider: provider.to_string(),
+            status: status.as_u16(),
+        });
+    }
+    // 403 could mean invalid credentials OR valid OAuth token with missing scopes
+    // Check the response body to distinguish
+    if status == StatusCode::FORBIDDEN {
+        let body = response.text().unwrap_or_default();
+        // OAuth tokens may lack scopes for /v1/models but still be valid
+        // "Missing scopes" means the token authenticated successfully
+        if body.contains("Missing scopes") || body.contains("insufficient permissions") {
+            return Ok(());
+        }
         return Err(TestAgentConfigError::InvalidCredentials {
             provider: provider.to_string(),
             status: status.as_u16(),

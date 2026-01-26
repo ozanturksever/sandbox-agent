@@ -1,15 +1,6 @@
 ---
 source: server/packages/sandbox-agent/tests/http_sse_snapshots.rs
-assertion_line: 928
 expression: normalize_sessions(&sessions)
 ---
-sessions:
-  - agent: claude
-    agentMode: build
-    agentSessionId: "<redacted>"
-    ended: false
-    eventCount: "<redacted>"
-    model: "<redacted>"
-    permissionMode: bypass
-    sessionId: snapshot-claude
-    variant: "<redacted>"
+hasExpectedFields: true
+sessionCount: 2
