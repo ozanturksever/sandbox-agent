@@ -12,7 +12,7 @@ importers:
         specifier: ^2.4.0
         version: 2.7.6
 
-  frontend/packages/web:
+  frontend/packages/inspector:
     dependencies:
       lucide-react:
         specifier: ^0.469.0
@@ -43,6 +43,12 @@ importers:
         specifier: ^5.4.7
         version: 5.4.21(@types/node@22.19.7)
 
+  frontend/packages/website:
+    devDependencies:
+      vite:
+        specifier: ^5.4.7
+        version: 5.4.21(@types/node@22.19.7)
+
   resources/agent-schemas:
     dependencies:
       '@anthropic-ai/claude-code':
@@ -67,6 +73,16 @@ importers:
       tsx:
         specifier: ^4.19.0
         version: 4.21.0
+
+  sdks/cli: {}
+
+  sdks/cli/platforms/darwin-arm64: {}
+
+  sdks/cli/platforms/darwin-x64: {}
+
+  sdks/cli/platforms/linux-x64: {}
+
+  sdks/cli/platforms/win32-x64: {}
 
   sdks/typescript:
     devDependencies:

@@ -10,9 +10,12 @@ Universal API for running Claude Code, Codex, OpenCode, and Amp inside sandboxes
 
 ## Architecture
 
-- TODO
-    - Embedded (runs agents locally)
-    - Sandboxed
+![Agent Architecture Diagram](./agent-diagram.gif)
+
+The Sandbox Agent acts as a universal adapter between your client application and various coding agents (Claude Code, Codex, OpenCode, Amp). Each agent has its own adapter (e.g., `claude_adapter.rs`) that handles the translation between the universal API and the agent-specific interface.
+
+- **Embedded Mode**: Runs agents locally as subprocesses
+- **Server Mode**: Runs as HTTP server from any sandbox provider
 
 ## Components
 
