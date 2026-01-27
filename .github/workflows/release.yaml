@@ -42,12 +42,12 @@ jobs:
         run: npm install -g tsx
 
       - name: Install workspace dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
 
       - name: Install release script dependencies
         run: |
           cd scripts/release
-          pnpm install --ignore-workspace
+          pnpm install --no-frozen-lockfile --ignore-workspace
 
       - name: Run setup phase
         run: |
@@ -94,7 +94,7 @@ jobs:
 
       - name: Build inspector frontend
         run: |
-          pnpm install
+          pnpm install --no-frozen-lockfile
           SANDBOX_AGENT_SKIP_INSPECTOR=1 pnpm --filter @sandbox-agent/inspector build
 
       - name: Set up Docker Buildx
@@ -134,12 +134,12 @@ jobs:
         run: npm install -g tsx
 
       - name: Install workspace dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
 
       - name: Install release script dependencies
         run: |
           cd scripts/release
-          pnpm install --ignore-workspace
+          pnpm install --no-frozen-lockfile --ignore-workspace
 
       - name: Install AWS CLI
         run: |
