@@ -3874,7 +3874,7 @@ fn agent_modes_for(agent: AgentId) -> Vec<AgentModeInfo> {
             AgentModeInfo {
                 id: "plan".to_string(),
                 name: "Plan".to_string(),
-                description: "Plan mode (requires permissionMode=plan)".to_string(),
+                description: "Plan mode (prompt-only)".to_string(),
             },
         ],
         AgentId::Amp => vec![AgentModeInfo {
@@ -3947,8 +3947,18 @@ fn normalize_permission_mode(
             .into())
         }
     };
+    if agent == AgentId::Claude {
+        if mode == "plan" {
+            return Err(SandboxError::ModeNotSupported {
+                agent: agent.as_str().to_string(),
+                mode: mode.to_string(),
+            }
+            .into());
+        }
+        return Ok("bypass".to_string());
+    }
     let supported = match agent {
-        AgentId::Claude | AgentId::Codex => matches!(mode, "default" | "plan" | "bypass"),
+        AgentId::Codex => matches!(mode, "default" | "plan" | "bypass"),
         AgentId::Amp => matches!(mode, "default" | "bypass"),
         AgentId::Opencode => matches!(mode, "default"),
         AgentId::Mock => matches!(mode, "default" | "plan" | "bypass"),
@@ -3969,18 +3979,6 @@ fn normalize_modes(
     permission_mode: Option<&str>,
 ) -> Result<(String, String), SandboxError> {
     let agent_mode = normalize_agent_mode(agent, agent_mode)?;
-    if agent == AgentId::Claude && agent_mode == "plan" {
-        if let Some(permission_mode) = permission_mode {
-            if permission_mode != "plan" {
-                return Err(SandboxError::InvalidRequest {
-                    message: "Claude agentMode=plan requires permissionMode=plan".to_string(),
-                }
-                .into());
-            }
-        }
-        let permission_mode = normalize_permission_mode(agent, Some("plan"))?;
-        return Ok((agent_mode, permission_mode));
-    }
     let permission_mode = normalize_permission_mode(agent, permission_mode)?;
     Ok((agent_mode, permission_mode))
 }

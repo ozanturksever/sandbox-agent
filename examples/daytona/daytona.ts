@@ -6,7 +6,7 @@ import {
   logInspectorUrl,
   runPrompt,
   waitForHealth,
-} from "../shared/sandbox-agent-client.ts";
+} from "@sandbox-agent/example-shared";
 
 const DEFAULT_PORT = 3000;
 const BINARY_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../../target/release/sandbox-agent");
@@ -25,9 +25,10 @@ export async function setupDaytonaSandboxAgent(): Promise<{
   console.log("Creating sandbox...");
   const sandbox = await daytona.create({ language });
 
+  // Daytona sandboxes can't reach releases.rivet.dev, so upload binary directly
   console.log("Uploading sandbox-agent...");
   await sandbox.fs.uploadFile(BINARY_PATH, "/home/daytona/sandbox-agent");
-  await sandbox.fs.setFilePermissions("/home/daytona/sandbox-agent", { mode: "755" });
+  await sandbox.process.executeCommand("chmod +x /home/daytona/sandbox-agent");
 
   console.log("Starting server...");
   const tokenFlag = token ? `--token ${token}` : "--no-token";

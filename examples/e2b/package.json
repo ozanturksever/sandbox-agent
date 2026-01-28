@@ -1,0 +1,17 @@
+{
+  "name": "@sandbox-agent/example-e2b",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx e2b.ts"
+  },
+  "dependencies": {
+    "@e2b/code-interpreter": "latest",
+    "@sandbox-agent/example-shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}

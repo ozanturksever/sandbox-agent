@@ -1,0 +1,8 @@
+{
+  "name": "@sandbox-agent/example-shared",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./sandbox-agent-client.ts"
+  }
+}

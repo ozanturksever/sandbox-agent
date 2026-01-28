@@ -1,0 +1,17 @@
+{
+  "name": "@sandbox-agent/example-vercel",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx vercel-sandbox.ts"
+  },
+  "dependencies": {
+    "@vercel/sandbox": "latest",
+    "@sandbox-agent/example-shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}

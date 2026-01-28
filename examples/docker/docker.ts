@@ -5,7 +5,7 @@ import {
   logInspectorUrl,
   runPrompt,
   waitForHealth,
-} from "../shared/sandbox-agent-client.ts";
+} from "@sandbox-agent/example-shared";
 
 const INSTALL_SCRIPT = "curl -fsSL https://releases.rivet.dev/sandbox-agent/latest/install.sh | sh";
 const DEFAULT_IMAGE = "debian:bookworm-slim";
