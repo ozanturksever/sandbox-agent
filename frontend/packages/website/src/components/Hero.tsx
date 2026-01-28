@@ -66,92 +66,71 @@ export function Hero() {
                   </div>
                   <div className="font-mono text-xs text-zinc-500">example_agent.ts</div>
                 </div>
-                <div className="overflow-x-auto p-6 font-mono text-sm leading-relaxed">
-                  <CodeLine num="01">
+                <pre className="overflow-x-auto p-6 font-mono text-sm leading-relaxed">
+                  <code>
                     <span className="text-purple-400">const</span>
-                    <span className="text-white"> agents = </span>
+                    <span className="text-zinc-300"> agents = </span>
                     <span className="text-purple-400">await</span>
-                    <span className="text-white"> client.</span>
+                    <span className="text-zinc-300"> client.</span>
                     <span className="text-blue-400">listAgents</span>
-                    <span className="text-white">();</span>
-                  </CodeLine>
-                  <div className="h-4" />
-                  <CodeLine num="02">
+                    <span className="text-zinc-300">();</span>
+                    {"\n\n"}
                     <span className="text-purple-400">await</span>
-                    <span className="text-white"> client.</span>
+                    <span className="text-zinc-300"> client.</span>
                     <span className="text-blue-400">createSession</span>
-                    <span className="text-white">(</span>
+                    <span className="text-zinc-300">(</span>
                     <span className="text-green-400">"demo"</span>
-                    <span className="text-white">{", {"}</span>
-                  </CodeLine>
-                  <CodeLine num="03">
-                    <span className="text-white">{"  agent: "}</span>
+                    <span className="text-zinc-300">{", {"}</span>
+                    {"\n"}
+                    <span className="text-zinc-300">{"  agent: "}</span>
                     <span className="text-green-400">"codex"</span>
-                    <span className="text-white">,</span>
-                  </CodeLine>
-                  <CodeLine num="04">
-                    <span className="text-white">{"  agentMode: "}</span>
+                    <span className="text-zinc-300">,</span>
+                    {"\n"}
+                    <span className="text-zinc-300">{"  agentMode: "}</span>
                     <span className="text-green-400">"default"</span>
-                    <span className="text-white">,</span>
-                  </CodeLine>
-                  <CodeLine num="05">
-                    <span className="text-white">{"  permissionMode: "}</span>
+                    <span className="text-zinc-300">,</span>
+                    {"\n"}
+                    <span className="text-zinc-300">{"  permissionMode: "}</span>
                     <span className="text-green-400">"plan"</span>
-                    <span className="text-white">,</span>
-                  </CodeLine>
-                  <CodeLine num="06">
-                    <span className="text-white">{"});"}</span>
-                  </CodeLine>
-                  <div className="h-4" />
-                  <CodeLine num="07">
+                    <span className="text-zinc-300">,</span>
+                    {"\n"}
+                    <span className="text-zinc-300">{"});"}</span>
+                    {"\n\n"}
                     <span className="text-purple-400">await</span>
-                    <span className="text-white"> client.</span>
+                    <span className="text-zinc-300"> client.</span>
                     <span className="text-blue-400">postMessage</span>
-                    <span className="text-white">(</span>
+                    <span className="text-zinc-300">(</span>
                     <span className="text-green-400">"demo"</span>
-                    <span className="text-white">{", { message: "}</span>
+                    <span className="text-zinc-300">{", { message: "}</span>
                     <span className="text-green-400">"Hello from the SDK."</span>
-                    <span className="text-white">{" });"}</span>
-                  </CodeLine>
-                  <div className="h-4" />
-                  <CodeLine num="08">
+                    <span className="text-zinc-300">{" });"}</span>
+                    {"\n\n"}
                     <span className="text-purple-400">for await</span>
-                    <span className="text-white"> (</span>
+                    <span className="text-zinc-300"> (</span>
                     <span className="text-purple-400">const</span>
-                    <span className="text-white"> event </span>
+                    <span className="text-zinc-300"> event </span>
                     <span className="text-purple-400">of</span>
-                    <span className="text-white"> client.</span>
+                    <span className="text-zinc-300"> client.</span>
                     <span className="text-blue-400">streamEvents</span>
-                    <span className="text-white">(</span>
+                    <span className="text-zinc-300">(</span>
                     <span className="text-green-400">"demo"</span>
-                    <span className="text-white">{", { offset: "}</span>
+                    <span className="text-zinc-300">{", { offset: "}</span>
                     <span className="text-amber-400">0</span>
-                    <span className="text-white">{" })) {"}</span>
-                  </CodeLine>
-                  <CodeLine num="09">
-                    <span className="text-white">{"  console."}</span>
+                    <span className="text-zinc-300">{" })) {"}</span>
+                    {"\n"}
+                    <span className="text-zinc-300">{"  console."}</span>
                     <span className="text-blue-400">log</span>
-                    <span className="text-white">(event.type, event.data);</span>
-                  </CodeLine>
-                  <CodeLine num="10">
-                    <span className="text-white">{"}"}</span>
-                  </CodeLine>
-                </div>
+                    <span className="text-zinc-300">(event.type, event.data);</span>
+                    {"\n"}
+                    <span className="text-zinc-300">{"}"}</span>
+                  </code>
+                </pre>
               </div>
             </div>
           </div>
         </div>
       </div>
     </section>
-  );
-}
-
-function CodeLine({ num, children }: { num: string; children: React.ReactNode }) {
-  return (
-    <div className="flex gap-4 whitespace-nowrap">
-      <span className="text-zinc-600 select-none">{num}</span>
-      {children}
-    </div>
   );
 }
 
