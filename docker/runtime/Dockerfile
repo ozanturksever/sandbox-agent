@@ -1,11 +1,9 @@
 # syntax=docker/dockerfile:1.10.0
 
-ARG TARGETARCH
-
 # ============================================================================
 # AMD64 Builder - Uses cross-tools musl toolchain
 # ============================================================================
-FROM rust:1.88.0 AS builder-amd64
+FROM --platform=linux/amd64 rust:1.88.0 AS builder-amd64
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -70,7 +68,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # ============================================================================
 # ARM64 Builder - Uses Alpine with native musl
 # ============================================================================
-FROM rust:1.88-alpine AS builder-arm64
+FROM --platform=linux/arm64 rust:1.88-alpine AS builder-arm64
 
 RUN apk add --no-cache \
     musl-dev \
@@ -101,6 +99,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # ============================================================================
 # Select the appropriate builder based on target architecture
 # ============================================================================
+ARG TARGETARCH
 FROM builder-${TARGETARCH} AS builder
 
 # Runtime stage - minimal image

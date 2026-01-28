@@ -195,6 +195,8 @@ jobs:
           tags: rivetdev/sandbox-agent:${{ steps.vars.outputs.sha_short }}${{ matrix.arch_suffix }}
           file: docker/runtime/Dockerfile
           platforms: ${{ matrix.platform }}
+          build-args: |
+            TARGETARCH=${{ contains(matrix.platform, 'arm64') && 'arm64' || 'amd64' }}
 
   complete:
     name: "Complete"
