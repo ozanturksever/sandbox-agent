@@ -53,12 +53,11 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
         cd .. && \
         rm -rf openssl-$SSL_VER*; \
     elif [ "$TARGETARCH" = "arm64" ]; then \
-        export CC=musl-gcc && \
         wget https://www.openssl.org/source/openssl-$SSL_VER.tar.gz && \
         tar -xzf openssl-$SSL_VER.tar.gz && \
         cd openssl-$SSL_VER && \
-        ./Configure no-shared no-async --prefix=/musl --openssldir=/musl/ssl linux-aarch64 && \
-        make -j$(nproc) && \
+        CC="musl-gcc -static" ./Configure no-shared no-async --prefix=/musl --openssldir=/musl/ssl linux-generic64 && \
+        make -j$(nproc) CC="musl-gcc -static" && \
         make install_sw && \
         cd .. && \
         rm -rf openssl-$SSL_VER*; \
