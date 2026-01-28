@@ -122,12 +122,12 @@ export function GetStarted() {
               </div>
             </div>
 
-            <p className="relative z-10 mb-4 text-sm leading-relaxed text-zinc-400">
+            <p className="relative z-10 mb-4 text-sm leading-relaxed text-zinc-400 min-h-[4.5rem]">
               Import the TypeScript SDK directly into your Node or browser application. Full type safety and streaming support.
             </p>
 
-            <div className="relative z-10 mt-auto">
-              <div className="overflow-hidden rounded-lg border border-white/5 bg-black/50">
+            <div className="relative z-10 flex-1 flex flex-col">
+              <div className="overflow-hidden rounded-lg border border-white/5 bg-black/50 flex-1 flex flex-col">
                 <div className="flex items-center justify-between border-b border-white/5 bg-white/5 px-3 py-2">
                   <span className="text-[10px] font-medium text-zinc-500">example.ts</span>
                   <CopyButton text={sdkCodeRaw} />
@@ -153,26 +153,27 @@ export function GetStarted() {
               </div>
             </div>
 
-            <p className="relative z-10 mb-4 text-sm leading-relaxed text-zinc-400">
+            <p className="relative z-10 mb-4 text-sm leading-relaxed text-zinc-400 min-h-[4.5rem]">
               Run as an HTTP server and connect from any language. Deploy to E2B, Daytona, Vercel, or your own infrastructure.
             </p>
 
-            <div className="relative z-10 mt-auto">
-              <div className="overflow-hidden rounded-lg border border-white/5 bg-black/50 p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <pre className="font-mono text-[11px] leading-relaxed overflow-x-auto">
-                    <code>
-                      <span className="text-zinc-500">$ </span>
-                      <span className="text-zinc-300">curl -fsSL \</span>
-                      {"\n"}
-                      <span className="text-zinc-300">{"    "}</span>
-                      <span className="text-green-400">https://releases.rivet.dev/sandbox-agent/latest/install.sh</span>
-                      <span className="text-zinc-300"> | </span>
-                      <span className="text-blue-400">sh</span>
-                    </code>
-                  </pre>
+            <div className="relative z-10 flex-1 flex flex-col">
+              <div className="overflow-hidden rounded-lg border border-white/5 bg-black/50 flex-1 flex flex-col">
+                <div className="flex items-center justify-between border-b border-white/5 bg-white/5 px-3 py-2">
+                  <span className="text-[10px] font-medium text-zinc-500">terminal</span>
                   <CopyButton text={sandboxCommand} />
                 </div>
+                <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed flex-1">
+                  <code>
+                    <span className="text-zinc-500">$ </span>
+                    <span className="text-zinc-300">curl -fsSL \</span>
+                    {"\n"}
+                    <span className="text-zinc-300">{"    "}</span>
+                    <span className="text-green-400">https://releases.rivet.dev/sandbox-agent/latest/install.sh</span>
+                    <span className="text-zinc-300"> | </span>
+                    <span className="text-blue-400">sh</span>
+                  </code>
+                </pre>
               </div>
             </div>
           </div>
@@ -193,31 +194,32 @@ export function GetStarted() {
               </div>
             </div>
 
-            <p className="relative z-10 mb-4 text-sm leading-relaxed text-zinc-400">
+            <p className="relative z-10 mb-4 text-sm leading-relaxed text-zinc-400 min-h-[4.5rem]">
               Clone the repo and build with Cargo. Customize, contribute, or embed directly in your Rust project.
             </p>
 
-            <div className="relative z-10 mt-auto">
-              <div className="overflow-hidden rounded-lg border border-white/5 bg-black/50 p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <pre className="font-mono text-[11px] leading-relaxed overflow-x-auto">
-                    <code>
-                      <span className="text-zinc-500">$ </span>
-                      <span className="text-blue-400">git clone</span>
-                      <span className="text-zinc-300"> </span>
-                      <span className="text-green-400">https://github.com/rivet-dev/sandbox-agent</span>
-                      {"\n"}
-                      <span className="text-zinc-500">$ </span>
-                      <span className="text-blue-400">cd</span>
-                      <span className="text-zinc-300"> sandbox-agent</span>
-                      {"\n"}
-                      <span className="text-zinc-500">$ </span>
-                      <span className="text-blue-400">cargo run</span>
-                      <span className="text-zinc-300"> -p sandbox-agent --release</span>
-                    </code>
-                  </pre>
+            <div className="relative z-10 flex-1 flex flex-col">
+              <div className="overflow-hidden rounded-lg border border-white/5 bg-black/50 flex-1 flex flex-col">
+                <div className="flex items-center justify-between border-b border-white/5 bg-white/5 px-3 py-2">
+                  <span className="text-[10px] font-medium text-zinc-500">terminal</span>
                   <CopyButton text={sourceCommands} />
                 </div>
+                <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed flex-1">
+                  <code>
+                    <span className="text-zinc-500">$ </span>
+                    <span className="text-blue-400">git clone</span>
+                    <span className="text-zinc-300"> </span>
+                    <span className="text-green-400">https://github.com/rivet-dev/sandbox-agent</span>
+                    {"\n"}
+                    <span className="text-zinc-500">$ </span>
+                    <span className="text-blue-400">cd</span>
+                    <span className="text-zinc-300"> sandbox-agent</span>
+                    {"\n"}
+                    <span className="text-zinc-500">$ </span>
+                    <span className="text-blue-400">cargo run</span>
+                    <span className="text-zinc-300"> -p sandbox-agent --release</span>
+                  </code>
+                </pre>
               </div>
             </div>
           </div>

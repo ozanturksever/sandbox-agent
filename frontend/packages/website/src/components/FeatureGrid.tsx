@@ -42,12 +42,11 @@ export function FeatureGrid() {
     <section id="features" className="relative overflow-hidden border-t border-white/5 py-32">
       <div className="relative z-10 mx-auto max-w-7xl px-6">
         <div className="mb-16">
-          <h2 className="mb-6 text-3xl font-medium tracking-tight text-white md:text-5xl">
-            Full feature coverage. <br />
-            <span className="text-zinc-500">Available as an HTTP API or TypeScript SDK.</span>
+          <h2 className="mb-4 text-3xl font-medium tracking-tight text-white md:text-5xl">
+            Full feature coverage.
           </h2>
           <p className="text-lg leading-relaxed text-zinc-400">
-            Everything you need to integrate coding agents in record time.
+            Available as an HTTP API or TypeScript SDK.
           </p>
         </div>
 
