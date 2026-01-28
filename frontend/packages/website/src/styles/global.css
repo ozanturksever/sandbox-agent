@@ -13,11 +13,11 @@
   }
 
   ::-webkit-scrollbar {
-    @apply w-2;
+    @apply w-2 h-2;
   }
 
   ::-webkit-scrollbar-track {
-    @apply bg-zinc-900;
+    @apply bg-transparent;
   }
 
   ::-webkit-scrollbar-thumb {
@@ -26,6 +26,19 @@
 
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-zinc-600;
+  }
+
+  ::-webkit-scrollbar-corner {
+    @apply bg-transparent;
+  }
+
+  /* Code block scrollbars */
+  pre::-webkit-scrollbar {
+    @apply h-1.5;
+  }
+
+  pre::-webkit-scrollbar-thumb {
+    @apply bg-zinc-600 rounded-full;
   }
 }
 
