@@ -460,7 +460,7 @@
         position: absolute;
         top: 30px;
         right: 0;
-        min-width: 140px;
+        min-width: 200px;
         background: var(--surface);
         border: 1px solid var(--border-2);
         border-radius: 8px;
@@ -484,7 +484,6 @@
         transition: all var(--transition);
         display: flex;
         align-items: center;
-        justify-content: space-between;
         gap: 8px;
       }
 
@@ -494,25 +493,14 @@
       }
 
       .sidebar-add-option:hover .agent-badge {
-        background: rgba(255, 255, 255, 0.2);
-        color: #fff;
+        color: rgba(255, 255, 255, 0.6);
       }
 
       .agent-option-name {
-        flex: 1;
-        min-width: 0;
-      }
-
-      .agent-option-badges {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        flex-shrink: 0;
+        white-space: nowrap;
       }
 
       .agent-badge {
-        padding: 2px 6px;
-        border-radius: 4px;
         font-size: 10px;
         font-weight: 500;
         white-space: nowrap;
@@ -520,12 +508,10 @@
       }
 
       .agent-badge.installed {
-        background: rgba(48, 209, 88, 0.15);
-        color: var(--success);
+        color: var(--muted);
       }
 
       .agent-badge.version {
-        background: var(--border-2);
         color: var(--muted);
       }
 
@@ -734,7 +720,7 @@
         left: 50%;
         transform: translateX(-50%);
         margin-top: 4px;
-        min-width: 160px;
+        min-width: 200px;
         background: var(--surface);
         border: 1px solid var(--border-2);
         border-radius: 8px;

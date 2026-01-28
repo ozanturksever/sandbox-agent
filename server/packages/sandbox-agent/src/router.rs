@@ -265,6 +265,7 @@ struct SessionState {
     opencode_stream_started: bool,
     codex_sender: Option<mpsc::UnboundedSender<String>>,
     session_started_emitted: bool,
+    last_claude_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -318,6 +319,7 @@ impl SessionState {
             opencode_stream_started: false,
             codex_sender: None,
             session_started_emitted: false,
+            last_claude_message_id: None,
         })
     }
 
@@ -2066,6 +2068,11 @@ impl SessionManager {
                         break;
                     }
                 }
+            } else if agent == AgentId::Claude {
+                let conversions = self.parse_claude_line(&line, &session_id).await;
+                if !conversions.is_empty() {
+                    let _ = self.record_conversions(&session_id, conversions).await;
+                }
             } else {
                 let conversions = parse_agent_line(agent, &line, &session_id);
                 if !conversions.is_empty() {
@@ -2174,6 +2181,53 @@ impl SessionManager {
             }
         })?;
         Ok(session.record_conversions(conversions))
+    }
+
+    async fn parse_claude_line(&self, line: &str, session_id: &str) -> Vec<EventConversion> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        let mut value: Value = match serde_json::from_str(trimmed) {
+            Ok(value) => value,
+            Err(err) => {
+                return vec![agent_unparsed(
+                    "claude",
+                    &err.to_string(),
+                    Value::String(trimmed.to_string()),
+                )];
+            }
+        };
+        let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+        if event_type == "assistant" {
+            if let Some(id) = value
+                .get("message")
+                .and_then(|message| message.get("id"))
+                .and_then(Value::as_str)
+            {
+                let mut sessions = self.sessions.lock().await;
+                if let Some(session) = Self::session_mut(&mut sessions, session_id) {
+                    session.last_claude_message_id = Some(id.to_string());
+                }
+            }
+        } else if event_type == "result"
+            && value.get("message_id").is_none()
+            && value.get("messageId").is_none()
+        {
+            let last_id = {
+                let sessions = self.sessions.lock().await;
+                Self::session_ref(&sessions, session_id)
+                    .and_then(|session| session.last_claude_message_id.clone())
+            };
+            if let Some(id) = last_id {
+                if let Some(map) = value.as_object_mut() {
+                    map.insert("message_id".to_string(), Value::String(id));
+                }
+            }
+        }
+
+        convert_claude::event_to_universal_with_session(&value, session_id.to_string())
+            .unwrap_or_else(|err| vec![agent_unparsed("claude", &err, value)])
     }
 
     async fn record_error(

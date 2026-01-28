@@ -31,6 +31,7 @@ pub fn event_to_universal_with_session(
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
     let mut conversions = match event_type {
         "system" => vec![system_event_to_universal(event)],
+        "user" => Vec::new(),
         "assistant" => assistant_event_to_universal(event, &session_id),
         "tool_use" => tool_use_event_to_universal(event, &session_id),
         "tool_result" => tool_result_event_to_universal(event),
@@ -63,7 +64,7 @@ fn assistant_event_to_universal(event: &Value, session_id: &str) -> Vec<EventCon
         .unwrap_or_default();
 
     // Use session-based native_item_id so `result` event can reference the same item
-    let native_message_id = format!("{session_id}_message");
+    let native_message_id = claude_message_id(event, session_id);
     let mut message_parts = Vec::new();
 
     for block in content {
@@ -228,7 +229,7 @@ fn tool_result_event_to_universal(event: &Value) -> Vec<EventConversion> {
 fn result_event_to_universal(event: &Value, session_id: &str) -> Vec<EventConversion> {
     // The `result` event completes the message started by `assistant`.
     // Use the same native_item_id so they link to the same universal item.
-    let native_message_id = format!("{session_id}_message");
+    let native_message_id = claude_message_id(event, session_id);
     let result_text = event
         .get("result")
         .and_then(Value::as_str)
@@ -249,6 +250,17 @@ fn result_event_to_universal(event: &Value, session_id: &str) -> Vec<EventConver
         UniversalEventType::ItemCompleted,
         UniversalEventData::Item(ItemEventData { item: message_item }),
     )]
+}
+
+fn claude_message_id(event: &Value, session_id: &str) -> String {
+    event
+        .get("message")
+        .and_then(|message| message.get("id"))
+        .and_then(Value::as_str)
+        .or_else(|| event.get("message_id").and_then(Value::as_str))
+        .or_else(|| event.get("messageId").and_then(Value::as_str))
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| format!("{session_id}_message"))
 }
 
 fn item_events(item: UniversalItem, synthetic_start: bool) -> Vec<EventConversion> {

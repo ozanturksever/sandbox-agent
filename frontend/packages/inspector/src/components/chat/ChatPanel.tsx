@@ -202,12 +202,8 @@ const ChatPanel = ({
                         }}
                       >
                         <span className="agent-option-name">{agentLabels[agent.id] ?? agent.id}</span>
-                        {agent.installed && (
-                          <span className="agent-option-badges">
-                            <span className="agent-badge installed">Installed</span>
-                            {agent.version && <span className="agent-badge version">v{agent.version}</span>}
-                          </span>
-                        )}
+                        {agent.installed && <span className="agent-badge installed">Installed</span>}
+                        {agent.version && <span className="agent-badge version">v{agent.version}</span>}
                       </button>
                     ))}
                 </div>
