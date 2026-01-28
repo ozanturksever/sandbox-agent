@@ -1,0 +1,17 @@
+---
+source: server/packages/sandbox-agent/tests/http/http_sse_snapshots.rs
+assertion_line: 1119
+expression: normalize_events(&permission_events)
+---
+- metadata: true
+  seq: 1
+  session: started
+  source: daemon
+  synthetic: true
+  type: session.started
+- metadata: true
+  seq: 2
+  session: started
+  source: agent
+  synthetic: false
+  type: session.started

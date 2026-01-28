@@ -5,3 +5,4 @@ packages:
   - "sdks/cli/platforms/*"
   - "resources/agent-schemas"
   - "resources/vercel-ai-sdk-schemas"
+  - "scripts/release"

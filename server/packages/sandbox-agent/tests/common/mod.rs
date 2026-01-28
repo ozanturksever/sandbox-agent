@@ -272,38 +272,6 @@ pub fn find_assistant_message_item(events: &[Value]) -> Option<String> {
     })
 }
 
-pub fn event_sequence(event: &Value) -> Option<u64> {
-    event.get("sequence").and_then(Value::as_u64)
-}
-
-pub fn find_item_event_seq(events: &[Value], event_type: &str, item_id: &str) -> Option<u64> {
-    events.iter().find_map(|event| {
-        if event.get("type").and_then(Value::as_str) != Some(event_type) {
-            return None;
-        }
-        match event_type {
-            "item.delta" => {
-                let data = event.get("data")?;
-                let id = data.get("item_id")?.as_str()?;
-                if id == item_id {
-                    event_sequence(event)
-                } else {
-                    None
-                }
-            }
-            _ => {
-                let item = event.get("data")?.get("item")?;
-                let id = item.get("item_id")?.as_str()?;
-                if id == item_id {
-                    event_sequence(event)
-                } else {
-                    None
-                }
-            }
-        }
-    })
-}
-
 pub fn find_permission_id(events: &[Value]) -> Option<String> {
     events.iter().find_map(|event| {
         if event.get("type").and_then(Value::as_str) != Some("permission.requested") {
@@ -371,18 +339,4 @@ pub fn has_tool_result(events: &[Value]) -> bool {
         };
         item.get("kind").and_then(Value::as_str) == Some("tool_result")
     })
-}
-
-pub fn expect_basic_sequence(events: &[Value]) {
-    assert!(has_event_type(events, "session.started"), "session.started missing");
-    let item_id = find_assistant_message_item(events).expect("assistant message missing");
-    let started_seq = find_item_event_seq(events, "item.started", &item_id)
-        .expect("item.started missing");
-    // Intentionally require deltas here to validate our synthetic delta behavior.
-    let delta_seq = find_item_event_seq(events, "item.delta", &item_id)
-        .expect("item.delta missing");
-    let completed_seq = find_item_event_seq(events, "item.completed", &item_id)
-        .expect("item.completed missing");
-    assert!(started_seq < delta_seq, "item.started must precede delta");
-    assert!(delta_seq < completed_seq, "delta must precede completion");
 }

@@ -1,12 +1,27 @@
 # Server Testing
 
+## Test placement
+
+Place all new tests under `server/packages/**/tests/` (or a package-specific `tests/` folder). Avoid inline tests inside source files unless there is no viable alternative.
+
+## Test locations (overview)
+
+- Sandbox-agent integration tests live under `server/packages/sandbox-agent/tests/`:
+  - Agent flow coverage in `agent-flows/`
+  - Agent management coverage in `agent-management/`
+  - Shared server manager coverage in `server-manager/`
+  - HTTP/SSE and snapshot coverage in `http/` (snapshots in `http/snapshots/`)
+  - UI coverage in `ui/`
+  - Shared helpers in `common/`
+- Extracted agent schema roundtrip tests live under `server/packages/extracted-agent-schemas/tests/`
+
 ## Snapshot tests
 
-The HTTP/SSE snapshot suite lives in:
-- `server/packages/sandbox-agent/tests/http_sse_snapshots.rs`
+The HTTP/SSE snapshot suite entrypoint lives in:
+- `server/packages/sandbox-agent/tests/http_sse_snapshots.rs` (includes `tests/http/http_sse_snapshots.rs`)
 
 Snapshots are written to:
-- `server/packages/sandbox-agent/tests/snapshots/`
+- `server/packages/sandbox-agent/tests/http/snapshots/`
 
 ## Agent selection
 
@@ -47,9 +62,20 @@ Health checks run in a blocking thread to avoid Tokio runtime drop errors inside
 ## Snapshot stability
 
 To keep snapshots deterministic:
+- Use the mock agent as the **master** event sequence; all other agents must match its behavior 1:1.
+- Snapshots should compare a **canonical event skeleton** (event order matters) with strict ordering across:
+  - `item.started` → `item.delta` → `item.completed`
+  - presence/absence of `session.ended`
+  - permission/question request and resolution flows
+- Scrub non-deterministic fields from snapshots:
+  - IDs, timestamps, native IDs
+  - text content, tool inputs/outputs, provider-specific metadata
+  - `source` and `synthetic` flags (these are implementation details)
+- The sandbox-agent is responsible for emitting **synthetic events** so that real agents match the mock sequence exactly.
 - Event streams are truncated after the first assistant or error event.
 - Permission flow snapshots are truncated after the permission request (or first assistant) event.
 - Unknown events are preserved as `kind: unknown` (raw payload in universal schema).
+- Prefer snapshot-based event skeleton assertions over manual event-order assertions in tests.
 
 ## Typical commands
 

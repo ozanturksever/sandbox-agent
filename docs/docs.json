@@ -42,7 +42,7 @@
 					"universal-api",
 					"frontend",
 					"building-chat-ui",
-					"persisting-chat-logs"
+					"manage-session-state"
 				]
 			},
 			{

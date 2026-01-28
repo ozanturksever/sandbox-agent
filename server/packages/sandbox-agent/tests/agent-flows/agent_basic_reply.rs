@@ -1,3 +1,4 @@
+#[path = "../common/mod.rs"]
 mod common;
 
 use common::*;
@@ -29,8 +30,6 @@ async fn agent_basic_reply() {
             "no events collected for {}",
             config.agent.as_str()
         );
-        expect_basic_sequence(&events);
-
         let caps = capabilities
             .get(config.agent.as_str())
             .expect("capabilities missing");

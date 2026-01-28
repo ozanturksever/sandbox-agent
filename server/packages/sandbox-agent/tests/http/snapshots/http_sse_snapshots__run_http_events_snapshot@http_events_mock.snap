@@ -1,19 +1,15 @@
 ---
-source: server/packages/sandbox-agent/tests/http_sse_snapshots.rs
-assertion_line: 742
+source: server/packages/sandbox-agent/tests/http/http_sse_snapshots.rs
+assertion_line: 804
 expression: normalized
 ---
 - metadata: true
   seq: 1
   session: started
-  source: daemon
-  synthetic: true
   type: session.started
 - metadata: true
   seq: 2
   session: started
-  source: agent
-  synthetic: false
   type: session.started
 - item:
     content_types:
@@ -22,16 +18,12 @@ expression: normalized
     role: assistant
     status: in_progress
   seq: 3
-  source: daemon
-  synthetic: true
   type: item.started
 - delta:
     delta: "<redacted>"
     item_id: "<redacted>"
     native_item_id: "<redacted>"
   seq: 4
-  source: daemon
-  synthetic: true
   type: item.delta
 - item:
     content_types:
@@ -40,6 +32,4 @@ expression: normalized
     role: assistant
     status: completed
   seq: 5
-  source: agent
-  synthetic: false
   type: item.completed

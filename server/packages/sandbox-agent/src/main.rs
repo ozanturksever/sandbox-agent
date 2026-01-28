@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
 use reqwest::blocking::Client as HttpClient;
@@ -16,7 +17,7 @@ use sandbox_agent::router::{
 };
 use sandbox_agent::telemetry;
 use sandbox_agent::router::{AgentListResponse, AgentModesResponse, CreateSessionResponse, EventsResponse};
-use sandbox_agent::router::build_router;
+use sandbox_agent::router::{build_router_with_state, shutdown_servers};
 use sandbox_agent::ui;
 use serde::Serialize;
 use serde_json::Value;
@@ -352,8 +353,8 @@ fn run_server(cli: &Cli, server: &ServerArgs) -> Result<(), CliError> {
 
     let agent_manager =
         AgentManager::new(default_install_dir()).map_err(|err| CliError::Server(err.to_string()))?;
-    let state = AppState::new(auth, agent_manager);
-    let mut router = build_router(state);
+    let state = Arc::new(AppState::new(auth, agent_manager));
+    let (mut router, state) = build_router_with_state(state);
 
     if let Some(cors) = build_cors_layer(server)? {
         router = router.layer(cors);
@@ -384,7 +385,12 @@ fn run_server(cli: &Cli, server: &ServerArgs) -> Result<(), CliError> {
         } else {
             tracing::info!("inspector ui not embedded; set SANDBOX_AGENT_SKIP_INSPECTOR=1 to skip embedding during builds");
         }
+        let shutdown_state = state.clone();
         axum::serve(listener, router)
+            .with_graceful_shutdown(async move {
+                let _ = tokio::signal::ctrl_c().await;
+                shutdown_servers(&shutdown_state).await;
+            })
             .await
             .map_err(|err| CliError::Server(err.to_string()))
     })
