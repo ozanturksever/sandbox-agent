@@ -64,7 +64,7 @@ jobs:
           EOF
 
           # Install dependencies
-          pnpm install
+          pnpm install --no-frozen-lockfile
 
           # Install tsx globally
           npm install -g tsx
@@ -231,7 +231,7 @@ jobs:
           EOF
 
           # Install dependencies
-          pnpm install
+          pnpm install --no-frozen-lockfile
 
           # Install tsx globally
           npm install -g tsx
