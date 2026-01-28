@@ -1,0 +1,5 @@
+---
+source: server/packages/sandbox-agent/tests/sessions/session_lifecycle.rs
+expression: value
+---
+status: 204

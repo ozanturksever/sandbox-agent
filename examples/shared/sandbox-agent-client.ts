@@ -16,6 +16,27 @@ export function ensureUrl(rawUrl: string): string {
   return `https://${rawUrl}`;
 }
 
+const INSPECTOR_URL = "https://inspect.sandboxagent.dev";
+
+export function buildInspectorUrl({
+  baseUrl,
+  token,
+}: {
+  baseUrl: string;
+  token?: string;
+}): string {
+  const normalized = normalizeBaseUrl(ensureUrl(baseUrl));
+  const params = new URLSearchParams({ url: normalized });
+  if (token) {
+    params.set("token", token);
+  }
+  return `${INSPECTOR_URL}?${params.toString()}`;
+}
+
+export function logInspectorUrl({ baseUrl, token }: { baseUrl: string; token?: string }): void {
+  console.log(`Inspector: ${buildInspectorUrl({ baseUrl, token })}`);
+}
+
 type HeaderOptions = {
   token?: string;
   extraHeaders?: Record<string, string>;

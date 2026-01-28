@@ -4,7 +4,8 @@
     "title": "sandbox-agent",
     "description": "",
     "contact": {
-      "name": "Sandbox Agent Contributors"
+      "name": "Rivet Gaming, LLC",
+      "email": "developer@rivet.gg"
     },
     "license": {
       "name": "Apache-2.0"
@@ -662,6 +663,7 @@
           "sessionLifecycle",
           "errorEvents",
           "reasoning",
+          "status",
           "commandExecution",
           "fileChanges",
           "mcpTools",
@@ -705,6 +707,9 @@
           "sharedProcess": {
             "type": "boolean",
             "description": "Whether this agent uses a shared long-running server process (vs per-turn subprocess)"
+          },
+          "status": {
+            "type": "boolean"
           },
           "streamingDeltas": {
             "type": "boolean"

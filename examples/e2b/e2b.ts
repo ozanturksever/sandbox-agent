@@ -2,6 +2,7 @@ import { Sandbox } from "@e2b/code-interpreter";
 import { pathToFileURL } from "node:url";
 import {
   ensureUrl,
+  logInspectorUrl,
   runPrompt,
   waitForHealth,
 } from "../shared/sandbox-agent-client.ts";
@@ -45,6 +46,7 @@ export async function setupE2BSandboxAgent(): Promise<{
 
   const baseUrl = ensureUrl(sandbox.getHost(port));
   await waitForHealth({ baseUrl, token });
+  logInspectorUrl({ baseUrl, token });
 
   const cleanup = async () => {
     try {

@@ -1,0 +1,94 @@
+---
+source: server/packages/sandbox-agent/tests/sessions/session_lifecycle.rs
+expression: value
+---
+session_a:
+  - item:
+      content_types:
+        - text
+      kind: message
+      role: user
+      status: in_progress
+    seq: 1
+    type: item.started
+  - delta:
+      delta: "<redacted>"
+      item_id: "<redacted>"
+      native_item_id: "<redacted>"
+    seq: 2
+    type: item.delta
+  - item:
+      content_types:
+        - text
+      kind: message
+      role: user
+      status: completed
+    seq: 3
+    type: item.completed
+  - item:
+      content_types:
+        - text
+      kind: message
+      role: assistant
+      status: in_progress
+    seq: 4
+    type: item.started
+  - delta:
+      delta: "<redacted>"
+      item_id: "<redacted>"
+      native_item_id: "<redacted>"
+    seq: 5
+    type: item.delta
+  - item:
+      content_types:
+        - text
+      kind: message
+      role: assistant
+      status: completed
+    seq: 6
+    type: item.completed
+session_b:
+  - item:
+      content_types:
+        - text
+      kind: message
+      role: user
+      status: in_progress
+    seq: 1
+    type: item.started
+  - delta:
+      delta: "<redacted>"
+      item_id: "<redacted>"
+      native_item_id: "<redacted>"
+    seq: 2
+    type: item.delta
+  - item:
+      content_types:
+        - text
+      kind: message
+      role: user
+      status: completed
+    seq: 3
+    type: item.completed
+  - item:
+      content_types:
+        - text
+      kind: message
+      role: assistant
+      status: in_progress
+    seq: 4
+    type: item.started
+  - delta:
+      delta: "<redacted>"
+      item_id: "<redacted>"
+      native_item_id: "<redacted>"
+    seq: 5
+    type: item.delta
+  - item:
+      content_types:
+        - text
+      kind: message
+      role: assistant
+      status: completed
+    seq: 6
+    type: item.completed

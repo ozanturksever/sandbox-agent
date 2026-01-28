@@ -2,6 +2,7 @@ import { Sandbox } from "@vercel/sandbox";
 import { pathToFileURL } from "node:url";
 import {
   ensureUrl,
+  logInspectorUrl,
   runPrompt,
   waitForHealth,
 } from "../shared/sandbox-agent-client.ts";
@@ -61,6 +62,7 @@ export async function setupVercelSandboxAgent(): Promise<{
 
   const baseUrl = ensureUrl(sandbox.domain(port));
   await waitForHealth({ baseUrl, token });
+  logInspectorUrl({ baseUrl, token });
 
   const cleanup = async () => {
     try {

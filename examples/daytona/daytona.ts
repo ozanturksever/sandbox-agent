@@ -2,6 +2,7 @@ import { Daytona } from "@daytonaio/sdk";
 import { pathToFileURL } from "node:url";
 import {
   ensureUrl,
+  logInspectorUrl,
   runPrompt,
   waitForHealth,
 } from "../shared/sandbox-agent-client.ts";
@@ -39,6 +40,7 @@ export async function setupDaytonaSandboxAgent(): Promise<{
 
   const baseUrl = ensureUrl(preview.url);
   await waitForHealth({ baseUrl, token, extraHeaders });
+  logInspectorUrl({ baseUrl, token });
 
   const cleanup = async () => {
     try {

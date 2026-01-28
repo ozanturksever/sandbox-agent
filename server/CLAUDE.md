@@ -10,18 +10,23 @@ Place all new tests under `server/packages/**/tests/` (or a package-specific `te
   - Agent flow coverage in `agent-flows/`
   - Agent management coverage in `agent-management/`
   - Shared server manager coverage in `server-manager/`
-  - HTTP/SSE and snapshot coverage in `http/` (snapshots in `http/snapshots/`)
+  - HTTP endpoint snapshots in `http/` (snapshots in `http/snapshots/`)
+  - Session capability snapshots in `sessions/` (one file per capability, e.g. `session_lifecycle.rs`, `permissions.rs`, `questions.rs`, `reasoning.rs`, `status.rs`; snapshots in `sessions/snapshots/`)
   - UI coverage in `ui/`
   - Shared helpers in `common/`
 - Extracted agent schema roundtrip tests live under `server/packages/extracted-agent-schemas/tests/`
 
 ## Snapshot tests
 
-The HTTP/SSE snapshot suite entrypoint lives in:
-- `server/packages/sandbox-agent/tests/http_sse_snapshots.rs` (includes `tests/http/http_sse_snapshots.rs`)
+HTTP endpoint snapshot entrypoint:
+- `server/packages/sandbox-agent/tests/http_endpoints.rs`
+
+Session snapshot entrypoint:
+- `server/packages/sandbox-agent/tests/sessions.rs`
 
 Snapshots are written to:
-- `server/packages/sandbox-agent/tests/http/snapshots/`
+- `server/packages/sandbox-agent/tests/http/snapshots/` (HTTP endpoint snapshots)
+- `server/packages/sandbox-agent/tests/sessions/snapshots/` (session/capability snapshots)
 
 ## Agent selection
 
@@ -71,6 +76,7 @@ To keep snapshots deterministic:
   - IDs, timestamps, native IDs
   - text content, tool inputs/outputs, provider-specific metadata
   - `source` and `synthetic` flags (these are implementation details)
+- Scrub `reasoning` and `status` content from session-baseline snapshots to keep the core event skeleton consistent across agents; validate those content types separately in their capability-specific tests.
 - The sandbox-agent is responsible for emitting **synthetic events** so that real agents match the mock sequence exactly.
 - Event streams are truncated after the first assistant or error event.
 - Permission flow snapshots are truncated after the permission request (or first assistant) event.
@@ -81,14 +87,19 @@ To keep snapshots deterministic:
 
 ## Typical commands
 
-Run only Claude snapshots:
+Run only Claude session snapshots:
 ```
-SANDBOX_TEST_AGENTS=claude cargo test -p sandbox-agent --test http_sse_snapshots
+SANDBOX_TEST_AGENTS=claude cargo test -p sandbox-agent --test sessions
 ```
 
-Run all detected agents:
+Run all detected session snapshots:
 ```
-cargo test -p sandbox-agent --test http_sse_snapshots
+cargo test -p sandbox-agent --test sessions
+```
+
+Run HTTP endpoint snapshots:
+```
+cargo test -p sandbox-agent --test http_endpoints
 ```
 
 ## Universal Schema

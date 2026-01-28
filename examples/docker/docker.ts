@@ -2,6 +2,7 @@ import Docker from "dockerode";
 import { pathToFileURL } from "node:url";
 import {
   ensureUrl,
+  logInspectorUrl,
   runPrompt,
   waitForHealth,
 } from "../shared/sandbox-agent-client.ts";
@@ -83,6 +84,7 @@ export async function setupDockerSandboxAgent(): Promise<{
 
   const baseUrl = ensureUrl(`http://127.0.0.1:${hostPort}`);
   await waitForHealth({ baseUrl, token });
+  logInspectorUrl({ baseUrl, token });
 
   const cleanup = async () => {
     try {

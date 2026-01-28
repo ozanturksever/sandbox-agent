@@ -5,10 +5,10 @@ members = ["server/packages/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Sandbox Agent Contributors"]
+authors = [ "Rivet Gaming, LLC <developer@rivet.gg>" ]
 license = "Apache-2.0"
 repository = "https://github.com/rivet-dev/sandbox-agent"
-description = "Universal agent API for AI coding assistants"
+description = "Universal API for automatic coding agents in sandboxes. Supprots Claude Code, Codex, OpenCode, and Amp."
 
 [workspace.dependencies]
 # Internal crates
