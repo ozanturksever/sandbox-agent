@@ -95,19 +95,19 @@ await new Promise((r) => setTimeout(r, 2000));
 const envCheck = await sandbox.process.executeCommand(
 	"env | grep -E 'ANTHROPIC|OPENAI' | sed 's/=.*/=<set>/'",
 );
-console.log("Sandbox env:", envCheck.result.output || "(none)");
+console.log("Sandbox env:", envCheck.result || "(none)");
 
 const binCheck = await sandbox.process.executeCommand(
 	"ls -la /root/.local/share/sandbox-agent/bin/",
 );
-console.log("Agent binaries:", binCheck.result.output);
+console.log("Agent binaries:", binCheck.result);
 
 // Network connectivity test
 console.log("Testing network connectivity...");
 const netTest = await sandbox.process.executeCommand(
 	"curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 https://api.anthropic.com/v1/messages 2>&1 || echo 'FAILED'",
 );
-const httpCode = netTest.result.output?.trim();
+const httpCode = netTest.result?.trim();
 if (httpCode === "405" || httpCode === "401") {
 	console.log("api.anthropic.com: reachable");
 } else if (httpCode === "000" || httpCode === "FAILED" || !httpCode) {
@@ -125,9 +125,9 @@ const cleanup = async () => {
 	const logs = await sandbox.process.executeCommand(
 		"cat /tmp/sandbox-agent.log 2>/dev/null | tail -50",
 	);
-	if (logs.result.output) {
+	if (logs.result) {
 		console.log("\n--- Server logs ---");
-		console.log(logs.result.output);
+		console.log(logs.result);
 	}
 	console.log("Cleaning up...");
 	await sandbox.delete(60);
