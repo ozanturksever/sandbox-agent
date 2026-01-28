@@ -6,4 +6,5 @@ packages:
   - "resources/agent-schemas"
   - "resources/vercel-ai-sdk-schemas"
   - "scripts/release"
+  - "scripts/sandbox-testing"
   - "examples/*"

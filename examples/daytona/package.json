@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/daytona-fallback.ts",
+    "start": "tsx src/daytona.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

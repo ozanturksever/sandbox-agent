@@ -18,17 +18,27 @@ const faqs = [
   {
     question: 'How is session data persisted?',
     answer:
-      "Events stream in a universal JSON schema. Persist them anywhere. We have adapters for Postgres and ClickHouse, or use <a href='https://rivet.gg' target='_blank' rel='noopener noreferrer' class='text-orange-400 hover:underline'>Rivet Actors</a> for managed stateful storage.",
+      "This SDK does not handle persisting session data. Events stream in a universal JSON schema that you can persist anywhere. Consider using Postgres or <a href='https://rivet.gg' target='_blank' rel='noopener noreferrer' class='text-orange-400 hover:underline'>Rivet Actors</a> for data persistence.",
   },
   {
     question: 'Can I run this locally or does it require a sandbox provider?',
     answer:
-      "Both. Run locally for development, deploy to E2B, Daytona, Vercel, or Docker for production.",
+      "Both. Run locally for development, deploy to E2B, Daytona, or Vercel Sandboxes for production.",
   },
   {
-    question: 'Is this open source?',
+    question: 'Does it support [platform]?',
     answer:
-      "Yes, MIT licensed. Code is on GitHub.",
+      "The server is a single Rust binary that runs anywhere with a curl install. If your platform can run Linux binaries (Docker, VMs, etc.), it works. See the deployment guides for E2B, Daytona, and Vercel Sandboxes.",
+  },
+  {
+    question: 'Can I use this with my personal API keys?',
+    answer:
+      "Yes. Use <code>sandbox-agent credentials extract-env</code> to extract API keys from your local agent configs (Claude Code, Codex, OpenCode, Amp) and pass them to the sandbox environment.",
+  },
+  {
+    question: 'Why Rust and not [language]?',
+    answer:
+      "Rust gives us a single static binary, fast startup, and predictable memory usage. That makes it easy to run inside sandboxes or in CI without shipping a large runtime, such as Node.js.",
   },
 ];
 

@@ -154,7 +154,7 @@ export async function createSession({
   const normalized = normalizeBaseUrl(baseUrl);
   const sessionId = randomUUID();
   const body: Record<string, string> = {
-    agent: agentId || process.env.SANDBOX_AGENT || "claude",
+    agent: agentId || detectAgent(),
   };
   const envAgentMode = agentMode || process.env.SANDBOX_AGENT_MODE;
   const envPermissionMode = permissionMode || process.env.SANDBOX_PERMISSION_MODE;
@@ -269,6 +269,15 @@ export async function sendMessageStream({
   return fullText;
 }
 
+function detectAgent(): string {
+  // Prefer explicit setting
+  if (process.env.SANDBOX_AGENT) return process.env.SANDBOX_AGENT;
+  // Select based on available API key
+  if (process.env.ANTHROPIC_API_KEY) return "claude";
+  if (process.env.OPENAI_API_KEY) return "codex";
+  return "claude";
+}
+
 export async function runPrompt({
   baseUrl,
   token,
@@ -286,11 +295,10 @@ export async function runPrompt({
     headers: extraHeaders,
   });
 
+  const agent = agentId || detectAgent();
   const sessionId = randomUUID();
-  await client.createSession(sessionId, {
-    agent: agentId || process.env.SANDBOX_AGENT || "claude",
-  });
-  console.log(`Session ${sessionId} ready. Press Ctrl+C to quit.`);
+  await client.createSession(sessionId, { agent });
+  console.log(`Session ${sessionId} using ${agent}. Press Ctrl+C to quit.`);
 
   let isThinking = false;
   let hasStartedOutput = false;
@@ -332,6 +340,12 @@ export async function runPrompt({
           turnResolve?.();
           turnResolve = null;
         }
+      }
+
+      // Handle errors
+      if (event.type === "error") {
+        const data = event.data as any;
+        console.error(`\nError: ${data?.message || JSON.stringify(data)}`);
       }
 
       // Handle session ended

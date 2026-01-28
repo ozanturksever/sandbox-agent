@@ -45,6 +45,7 @@ Universal schema guidance:
 - Use `docs/glossary.md` as the source of truth for universal schema terminology and keep it updated alongside schema changes.
 - On parse failures, emit an `agent.unparsed` event (source=daemon, synthetic=true) and treat it as a test failure. Preserve raw payloads when `include_raw=true`.
 - Track subagent support in `docs/conversion.md`. For now, normalize subagent activity into normal message/tool flow, but revisit explicit subagent modeling later.
+- Keep the FAQ in `README.md` and `frontend/packages/website/src/components/FAQ.tsx` in sync. When adding or modifying FAQ entries, update both files.
 
 ### CLI ⇄ HTTP endpoint map (keep in sync)
 
