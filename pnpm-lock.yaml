@@ -61,6 +61,9 @@ importers:
       '@sandbox-agent/example-shared':
         specifier: workspace:*
         version: link:../shared
+      sandbox-agent:
+        specifier: workspace:*
+        version: link:../../sdks/typescript
     devDependencies:
       '@types/node':
         specifier: latest
@@ -73,6 +76,10 @@ importers:
         version: 5.9.3
 
   examples/shared:
+    dependencies:
+      sandbox-agent:
+        specifier: workspace:*
+        version: link:../../sdks/typescript
     devDependencies:
       '@types/node':
         specifier: latest

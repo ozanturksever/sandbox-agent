@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { SandboxAgent } from "sandbox-agent";
 
 export function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
@@ -279,54 +280,57 @@ export async function runPrompt({
   extraHeaders?: Record<string, string>;
   agentId?: string;
 }): Promise<void> {
-  const normalized = normalizeBaseUrl(baseUrl);
-  const sessionId = await createSession({ baseUrl, token, extraHeaders, agentId });
+  const client = await SandboxAgent.connect({
+    baseUrl,
+    token,
+    headers: extraHeaders,
+  });
+
+  const sessionId = randomUUID();
+  await client.createSession(sessionId, {
+    agent: agentId || process.env.SANDBOX_AGENT || "claude",
+  });
   console.log(`Session ${sessionId} ready. Press Ctrl+C to quit.`);
 
-  // Connect to SSE event stream
-  const headers = buildHeaders({ token, extraHeaders });
-  const sseResponse = await fetch(`${normalized}/v1/sessions/${sessionId}/events/sse`, { headers });
-  if (!sseResponse.ok || !sseResponse.body) {
-    throw new Error(`Failed to connect to SSE: ${sseResponse.status}`);
-  }
+  let isThinking = false;
+  let hasStartedOutput = false;
+  let turnResolve: (() => void) | null = null;
 
-  const reader = sseResponse.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let lastSeq = 0;
-
-  // Process SSE events in background
+  // Stream events in background using SDK
   const processEvents = async () => {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    for await (const event of client.streamEvents(sessionId)) {
+      // Show thinking indicator when assistant starts
+      if (event.type === "item.started") {
+        const item = (event.data as any)?.item;
+        if (item?.role === "assistant") {
+          isThinking = true;
+          hasStartedOutput = false;
+          process.stdout.write("Thinking...");
+        }
+      }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const data = line.slice(6);
-        if (data === "[DONE]") continue;
-
-        try {
-          const event = JSON.parse(data);
-          if (event.sequence <= lastSeq) continue;
-          lastSeq = event.sequence;
-
-          // Print text deltas
-          if (event.type === "item.delta" && event.data?.delta) {
-            const delta = event.data.delta;
-            const text = typeof delta === "string" ? delta : delta.type === "text" ? delta.text || "" : "";
-            if (text) process.stdout.write(text);
+      // Print text deltas
+      if (event.type === "item.delta") {
+        const delta = (event.data as any)?.delta;
+        if (delta) {
+          if (isThinking && !hasStartedOutput) {
+            process.stdout.write("\r\x1b[K"); // Clear line
+            hasStartedOutput = true;
           }
+          const text = typeof delta === "string" ? delta : delta.type === "text" ? delta.text || "" : "";
+          if (text) process.stdout.write(text);
+        }
+      }
 
-          // Print newline after completed assistant message
-          if (event.type === "item.completed" && event.data?.item?.role === "assistant") {
-            process.stdout.write("\n> ");
-          }
-        } catch {}
+      // Signal turn complete
+      if (event.type === "item.completed") {
+        const item = (event.data as any)?.item;
+        if (item?.role === "assistant") {
+          isThinking = false;
+          process.stdout.write("\n");
+          turnResolve?.();
+          turnResolve = null;
+        }
       }
     }
   };
@@ -338,14 +342,16 @@ export async function runPrompt({
     const line = await rl.question("> ");
     if (!line.trim()) continue;
 
+    const turnComplete = new Promise<void>((resolve) => {
+      turnResolve = resolve;
+    });
+
     try {
-      await fetch(`${normalized}/v1/sessions/${sessionId}/messages`, {
-        method: "POST",
-        headers: buildHeaders({ token, extraHeaders, contentType: true }),
-        body: JSON.stringify({ message: line.trim() }),
-      });
+      await client.postMessage(sessionId, { message: line.trim() });
+      await turnComplete;
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
+      turnResolve = null;
     }
   }
 }

@@ -8,6 +8,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "sandbox-agent": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "latest",
     "typescript": "latest"

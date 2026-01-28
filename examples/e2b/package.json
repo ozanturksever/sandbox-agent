@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "@e2b/code-interpreter": "latest",
-    "@sandbox-agent/example-shared": "workspace:*"
+    "@sandbox-agent/example-shared": "workspace:*",
+    "sandbox-agent": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "latest",

@@ -47,7 +47,6 @@ if (process.env.OPENAI_API_KEY) envVars.OPENAI_API_KEY = process.env.OPENAI_API_
 const sandbox = await daytona.create({
 	snapshot: SNAPSHOT,
 	envVars,
-	autoStopInterval: 0,
 });
 
 console.log("Starting server...");
