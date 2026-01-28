@@ -13,8 +13,8 @@ RUN pnpm install --filter @sandbox-agent/inspector...
 # Copy SDK source (with pre-generated types)
 COPY sdks/typescript ./sdks/typescript
 
-# Build SDK (just tsc, skip generate since types are pre-generated)
-RUN cd sdks/typescript && pnpm exec tsc -p tsconfig.json
+# Build SDK (just tsup, skip generate since types are pre-generated)
+RUN cd sdks/typescript && pnpm exec tsup
 
 # Copy inspector source
 COPY frontend/packages/inspector ./frontend/packages/inspector
