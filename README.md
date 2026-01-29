@@ -240,6 +240,24 @@ Yes. Use `sandbox-agent credentials extract-env` to extract API keys from your l
 Rust gives us a single static binary, fast startup, and predictable memory usage. That makes it easy to run inside sandboxes or in CI without shipping a large runtime, such as Node.js.
 </details>
 
+<details>
+<summary><strong>Why can't I just run coding agents locally?</strong></summary>
+
+You can for development. But in production, you need isolation. Coding agents execute arbitrary code — that can't happen on your servers. Sandboxes provide the isolation; this SDK provides the HTTP API to control coding agents remotely.
+</details>
+
+<details>
+<summary><strong>How is this different from the agent's official SDK?</strong></summary>
+
+Official SDKs assume local execution. They spawn processes and expect interactive terminals. This SDK runs a server inside a sandbox that you connect to over HTTP — designed for remote control from the start.
+</details>
+
+<details>
+<summary><strong>Why not just SSH into the sandbox?</strong></summary>
+
+Coding agents expect interactive terminals with proper TTY handling. SSH with piped commands breaks tool confirmations, streaming output, and human-in-the-loop flows. The SDK handles all of this over a clean HTTP API.
+</details>
+
 ## Project Goals
 
 This project aims to solve 3 problems with agents:
