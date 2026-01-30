@@ -97,9 +97,7 @@ const ConnectScreen = ({
             </button>
 
             <p className="hint">
-              Start the server with CORS enabled for browser access:
-              <br />
-              <code>sandbox-agent server --cors-allow-origin {window.location.origin}</code>
+              Having trouble connecting? See the <a href="https://sandboxagent.dev/docs/cors" target="_blank" rel="noreferrer">CORS documentation</a>.
             </p>
           </div>
         </div>
