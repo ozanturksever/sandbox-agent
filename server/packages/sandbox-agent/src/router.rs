@@ -124,7 +124,9 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
         ));
     }
 
-    let mut router = Router::new().nest("/v1", v1_router);
+    let mut router = Router::new()
+        .route("/", get(get_root))
+        .nest("/v1", v1_router);
 
     if ui::is_enabled() {
         router = router.merge(ui::router());
@@ -3537,6 +3539,12 @@ async fn get_agent_modes(
     let agent_id = parse_agent_id(&agent)?;
     let modes = state.session_manager.agent_modes(agent_id).await?;
     Ok(Json(AgentModesResponse { modes }))
+}
+
+async fn get_root() -> &'static str {
+    "This is a Sandbox Agent server for orchestrating coding agents.\n\
+     See https://sandboxagent.dev for more information.\n\
+     Visit /ui/ for the inspector UI."
 }
 
 #[utoipa::path(
