@@ -76,7 +76,7 @@ icon: "rocket"
 
         ```bash
         curl -fsSL https://releases.rivet.dev/sandbox-agent/latest/install.sh | sh
-        sandbox-agent server --token "$SANDBOX_TOKEN" --host 127.0.0.1 --port 2468
+        sandbox-agent server --no-token --host 0.0.0.0 --port 2468
         ```
       </Tab>
 
@@ -84,7 +84,7 @@ icon: "rocket"
         Run without installing globally.
 
         ```bash
-        npx sandbox-agent server --token "$SANDBOX_TOKEN" --host 127.0.0.1 --port 2468
+        npx @sandbox-agent/cli server --no-token --host 0.0.0.0 --port 2468
         ```
       </Tab>
 
@@ -93,7 +93,7 @@ icon: "rocket"
 
         ```bash
         npm install -g @sandbox-agent/cli
-        sandbox-agent server --token "$SANDBOX_TOKEN" --host 127.0.0.1 --port 2468
+        sandbox-agent server --no-token --host 0.0.0.0 --port 2468
         ```
       </Tab>
 
@@ -101,7 +101,7 @@ icon: "rocket"
         If you're running from source instead of the installed CLI.
 
         ```bash
-        cargo run -p sandbox-agent -- server --token "$SANDBOX_TOKEN" --host 127.0.0.1 --port 2468
+        cargo run -p sandbox-agent -- server --no-token --host 0.0.0.0 --port 2468
         ```
       </Tab>
 
@@ -118,9 +118,45 @@ icon: "rocket"
       </Tab>
     </Tabs>
 
+	Binding to `0.0.0.0` allows the server to accept connections from any network interface, which is required when running inside a sandbox where clients connect remotely.
+
 	<AccordionGroup>
-		<Accordion title="Running without tokens">
-			If endpoint is not public, use `--no-token` to disable authentication. Most sandbox providers already secure their networking, so tokens are not required.
+		<Accordion title="Configuring token">
+			Tokens are usually not required. Most sandbox providers (E2B, Daytona, etc.) already secure their networking at the infrastructure level, so the server endpoint is never publicly accessible. For local development, binding to `127.0.0.1` ensures only local connections are accepted.
+
+			If you need to expose the server on a public endpoint, use `--token "$SANDBOX_TOKEN"` to require authentication on all requests:
+
+			```bash
+			sandbox-agent server --token "$SANDBOX_TOKEN" --host 0.0.0.0 --port 2468
+			```
+
+			Then pass the token when connecting:
+
+			<Tabs>
+				<Tab title="TypeScript">
+					```typescript
+					const client = await SandboxAgent.connect({
+					  baseUrl: "http://your-server:2468",
+					  token: process.env.SANDBOX_TOKEN,
+					});
+					```
+				</Tab>
+
+				<Tab title="curl">
+					```bash
+					curl "http://your-server:2468/v1/sessions" \
+					  -H "Authorization: Bearer $SANDBOX_TOKEN"
+					```
+				</Tab>
+
+				<Tab title="CLI">
+					```bash
+					sandbox-agent api sessions list \
+					  --endpoint http://your-server:2468 \
+					  --token "$SANDBOX_TOKEN"
+					```
+				</Tab>
+			</Tabs>
 		</Accordion>
 		<Accordion title="CORS">
 			If you're calling the server from a browser, see the [CORS configuration guide](/docs/cors).
@@ -149,7 +185,6 @@ icon: "rocket"
 
         const client = await SandboxAgent.connect({
           baseUrl: "http://127.0.0.1:2468",
-          token: process.env.SANDBOX_TOKEN,
         });
 
         await client.createSession("my-session", {
@@ -163,7 +198,6 @@ icon: "rocket"
       <Tab title="curl">
         ```bash
         curl -X POST "http://127.0.0.1:2468/v1/sessions/my-session" \
-          -H "Authorization: Bearer $SANDBOX_TOKEN" \
           -H "Content-Type: application/json" \
           -d '{"agent":"claude","agentMode":"build","permissionMode":"default"}'
         ```
@@ -173,8 +207,7 @@ icon: "rocket"
         ```bash
         sandbox-agent api sessions create my-session \
           --agent claude \
-          --endpoint http://127.0.0.1:2468 \
-          --token "$SANDBOX_TOKEN"
+          --endpoint http://127.0.0.1:2468
         ```
       </Tab>
     </Tabs>
@@ -193,7 +226,6 @@ icon: "rocket"
       <Tab title="curl">
         ```bash
         curl -X POST "http://127.0.0.1:2468/v1/sessions/my-session/messages" \
-          -H "Authorization: Bearer $SANDBOX_TOKEN" \
           -H "Content-Type: application/json" \
           -d '{"message":"Summarize the repository and suggest next steps."}'
         ```
@@ -203,8 +235,7 @@ icon: "rocket"
         ```bash
         sandbox-agent api sessions send-message my-session \
           --message "Summarize the repository and suggest next steps." \
-          --endpoint http://127.0.0.1:2468 \
-          --token "$SANDBOX_TOKEN"
+          --endpoint http://127.0.0.1:2468
         ```
       </Tab>
     </Tabs>
@@ -227,16 +258,13 @@ icon: "rocket"
       <Tab title="curl">
         ```bash
         # Poll for events
-        curl "http://127.0.0.1:2468/v1/sessions/my-session/events?offset=0&limit=50" \
-          -H "Authorization: Bearer $SANDBOX_TOKEN"
+        curl "http://127.0.0.1:2468/v1/sessions/my-session/events?offset=0&limit=50"
 
         # Stream events via SSE
-        curl "http://127.0.0.1:2468/v1/sessions/my-session/events/sse?offset=0" \
-          -H "Authorization: Bearer $SANDBOX_TOKEN"
+        curl "http://127.0.0.1:2468/v1/sessions/my-session/events/sse?offset=0"
 
         # Single-turn stream (post message and get streamed response)
         curl -N -X POST "http://127.0.0.1:2468/v1/sessions/my-session/messages/stream" \
-          -H "Authorization: Bearer $SANDBOX_TOKEN" \
           -H "Content-Type: application/json" \
           -d '{"message":"Hello"}'
         ```
@@ -246,19 +274,16 @@ icon: "rocket"
         ```bash
         # Poll for events
         sandbox-agent api sessions events my-session \
-          --endpoint http://127.0.0.1:2468 \
-          --token "$SANDBOX_TOKEN"
+          --endpoint http://127.0.0.1:2468
 
         # Stream events via SSE
         sandbox-agent api sessions events-sse my-session \
-          --endpoint http://127.0.0.1:2468 \
-          --token "$SANDBOX_TOKEN"
+          --endpoint http://127.0.0.1:2468
 
         # Single-turn stream
         sandbox-agent api sessions send-message-stream my-session \
           --message "Hello" \
-          --endpoint http://127.0.0.1:2468 \
-          --token "$SANDBOX_TOKEN"
+          --endpoint http://127.0.0.1:2468
         ```
       </Tab>
     </Tabs>
