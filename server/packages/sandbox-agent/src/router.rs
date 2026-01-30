@@ -41,7 +41,9 @@ use crate::ui;
 use crate::process_manager::{
     ProcessManager, ProcessInfo, ProcessListResponse, ProcessLogPaths, ProcessStatus,
     StartProcessRequest, StartProcessResponse, LogsQuery, LogsResponse,
+    ResizeTerminalRequest, TerminalSize, WriteInputRequest,
 };
+use crate::terminal::terminal_ws_handler;
 use sandbox_agent_agent_management::agents::{
     AgentError as ManagerError, AgentId, AgentManager, InstallOptions, SpawnOptions, StreamingSpawn,
 };
@@ -130,6 +132,14 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
         .route("/process/:id/stop", post(stop_process))
         .route("/process/:id/kill", post(kill_process))
         .route("/process/:id/logs", get(get_process_logs))
+        // Terminal/PTY routes
+        .route("/process/:id/resize", post(resize_terminal))
+        .route("/process/:id/input", post(write_terminal_input))
+        .with_state(shared.clone());
+
+    // WebSocket routes (outside of auth middleware for easier client access)
+    let ws_router = Router::new()
+        .route("/v1/process/:id/terminal", get(terminal_ws))
         .with_state(shared.clone());
 
     if shared.auth.token.is_some() {
@@ -141,7 +151,8 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
 
     let mut router = Router::new()
         .route("/", get(get_root))
-        .nest("/v1", v1_router);
+        .nest("/v1", v1_router)
+        .merge(ws_router);  // Add WebSocket routes
 
     if ui::is_enabled() {
         router = router.merge(ui::router());
@@ -177,7 +188,9 @@ pub async fn shutdown_servers(state: &Arc<AppState>) {
         stop_process,
         kill_process,
         delete_process,
-        get_process_logs
+        get_process_logs,
+        resize_terminal,
+        write_terminal_input
     ),
     components(
         schemas(
@@ -235,7 +248,10 @@ pub async fn shutdown_servers(state: &Arc<AppState>) {
             StartProcessRequest,
             StartProcessResponse,
             LogsQuery,
-            LogsResponse
+            LogsResponse,
+            TerminalSize,
+            ResizeTerminalRequest,
+            WriteInputRequest
         )
     ),
     tags(
@@ -4088,6 +4104,82 @@ async fn get_process_logs(
         let logs = state.process_manager.read_logs(&id, &query).await?;
         Ok(Json(logs).into_response())
     }
+}
+
+/// Resize a PTY terminal
+#[utoipa::path(
+    post,
+    path = "/v1/process/{id}/resize",
+    tag = "process",
+    params(
+        ("id" = String, Path, description = "Process ID")
+    ),
+    request_body = ResizeTerminalRequest,
+    responses(
+        (status = 200, description = "Terminal resized successfully"),
+        (status = 400, description = "Process does not have a PTY"),
+        (status = 404, description = "Process not found")
+    )
+)]
+async fn resize_terminal(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<ResizeTerminalRequest>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .process_manager
+        .resize_terminal(&id, request.cols, request.rows)
+        .await?;
+    Ok(StatusCode::OK)
+}
+
+/// Write data to a PTY terminal's input
+#[utoipa::path(
+    post,
+    path = "/v1/process/{id}/input",
+    tag = "process",
+    params(
+        ("id" = String, Path, description = "Process ID")
+    ),
+    request_body = WriteInputRequest,
+    responses(
+        (status = 200, description = "Data written to terminal"),
+        (status = 400, description = "Process does not have a PTY or invalid data"),
+        (status = 404, description = "Process not found")
+    )
+)]
+async fn write_terminal_input(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<WriteInputRequest>,
+) -> Result<StatusCode, ApiError> {
+    let data = if request.base64 {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(&request.data)
+            .map_err(|e| SandboxError::InvalidRequest {
+                message: format!("Invalid base64 data: {}", e),
+            })?
+    } else {
+        request.data.into_bytes()
+    };
+    
+    state
+        .process_manager
+        .write_terminal_input(&id, data)
+        .await?;
+    Ok(StatusCode::OK)
+}
+
+/// WebSocket endpoint for terminal I/O
+async fn terminal_ws(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Response, ApiError> {
+    terminal_ws_handler(ws, Path(id), State(state.process_manager.clone()))
+        .await
+        .map_err(|e| ApiError::Sandbox(e))
 }
 
 fn all_agents() -> [AgentId; 5] {

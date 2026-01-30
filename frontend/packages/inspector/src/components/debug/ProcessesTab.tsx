@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Play, Square, Skull, Trash2, RefreshCw, ChevronDown, ChevronRight, Terminal } from "lucide-react";
+import { Play, Square, Skull, Trash2, RefreshCw, ChevronDown, ChevronRight, Terminal as TerminalIcon, Monitor, FileText } from "lucide-react";
+import { Terminal } from "../terminal";
+
+export interface TerminalSize {
+  cols: number;
+  rows: number;
+}
 
 export interface ProcessInfo {
   id: string;
@@ -15,6 +21,12 @@ export interface ProcessInfo {
   startedAt: number;
   stoppedAt?: number | null;
   cwd?: string | null;
+  /** Whether this process has a PTY allocated (terminal mode) */
+  tty?: boolean;
+  /** Whether stdin is kept open for interactive input */
+  interactive?: boolean;
+  /** Current terminal size (if tty is true) */
+  terminalSize?: TerminalSize | null;
 }
 
 export interface ProcessListResponse {
@@ -69,6 +81,32 @@ const StatusBadge = ({ status, exitCode }: { status: string; exitCode?: number |
   );
 };
 
+const TtyBadge = ({ tty, interactive }: { tty?: boolean; interactive?: boolean }) => {
+  if (!tty) return null;
+  
+  return (
+    <span
+      style={{
+        background: "var(--color-info)",
+        color: "white",
+        padding: "2px 6px",
+        borderRadius: "4px",
+        fontSize: "10px",
+        fontWeight: 500,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4
+      }}
+      title={`TTY${interactive ? " + Interactive" : ""}`}
+    >
+      <Monitor style={{ width: 10, height: 10 }} />
+      PTY
+    </span>
+  );
+};
+
+type ViewMode = "logs" | "terminal";
+
 const ProcessesTab = ({ baseUrl, token }: ProcessesTabProps) => {
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -78,6 +116,7 @@ const ProcessesTab = ({ baseUrl, token }: ProcessesTabProps) => {
   const [logsLoading, setLogsLoading] = useState<Record<string, boolean>>({});
   const [stripTimestamps, setStripTimestamps] = useState(false);
   const [logStream, setLogStream] = useState<"combined" | "stdout" | "stderr">("combined");
+  const [viewMode, setViewMode] = useState<Record<string, ViewMode>>({});
   const refreshTimerRef = useRef<number | null>(null);
 
   const fetchWithAuth = useCallback(async (url: string, options: RequestInit = {}) => {
@@ -170,14 +209,26 @@ const ProcessesTab = ({ baseUrl, token }: ProcessesTabProps) => {
     }
   }, [baseUrl, fetchWithAuth, fetchProcesses, expandedId]);
 
-  const toggleExpand = useCallback((id: string) => {
+  const toggleExpand = useCallback((id: string, process: ProcessInfo) => {
     if (expandedId === id) {
       setExpandedId(null);
     } else {
       setExpandedId(id);
-      fetchLogs(id);
+      // Default to terminal view for TTY processes, logs for regular processes
+      const defaultMode = process.tty && process.status === "running" ? "terminal" : "logs";
+      setViewMode(prev => ({ ...prev, [id]: prev[id] || defaultMode }));
+      if (!process.tty || viewMode[id] === "logs") {
+        fetchLogs(id);
+      }
     }
-  }, [expandedId, fetchLogs]);
+  }, [expandedId, fetchLogs, viewMode]);
+
+  const getWsUrl = useCallback((id: string) => {
+    // Convert HTTP URL to WebSocket URL
+    const wsProtocol = baseUrl.startsWith("https") ? "wss" : "ws";
+    const wsBaseUrl = baseUrl.replace(/^https?:/, wsProtocol + ":");
+    return `${wsBaseUrl}/v1/process/${id}/terminal`;
+  }, [baseUrl]);
 
   // Initial fetch and auto-refresh
   useEffect(() => {
@@ -195,17 +246,18 @@ const ProcessesTab = ({ baseUrl, token }: ProcessesTabProps) => {
 
   // Refresh logs when options change
   useEffect(() => {
-    if (expandedId) {
+    if (expandedId && viewMode[expandedId] === "logs") {
       fetchLogs(expandedId);
     }
-  }, [stripTimestamps, logStream]);
+  }, [stripTimestamps, logStream, expandedId, viewMode, fetchLogs]);
 
   const runningCount = processes.filter(p => p.status === "running").length;
+  const ttyCount = processes.filter(p => p.tty).length;
 
   return (
     <div className="processes-tab">
       <div className="processes-header" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <Terminal style={{ width: 16, height: 16 }} />
+        <TerminalIcon style={{ width: 16, height: 16 }} />
         <span style={{ fontWeight: 600 }}>Processes</span>
         {runningCount > 0 && (
           <span className="running-badge" style={{
@@ -216,6 +268,17 @@ const ProcessesTab = ({ baseUrl, token }: ProcessesTabProps) => {
             fontSize: "11px"
           }}>
             {runningCount} running
+          </span>
+        )}
+        {ttyCount > 0 && (
+          <span style={{
+            background: "var(--color-info)",
+            color: "white",
+            padding: "2px 6px",
+            borderRadius: "10px",
+            fontSize: "11px"
+          }}>
+            {ttyCount} PTY
           </span>
         )}
         <div style={{ flex: 1 }} />
@@ -237,9 +300,12 @@ const ProcessesTab = ({ baseUrl, token }: ProcessesTabProps) => {
 
       {processes.length === 0 && !loading && (
         <div className="empty-state" style={{ textAlign: "center", padding: "24px 16px", color: "var(--color-muted)" }}>
-          <Terminal style={{ width: 32, height: 32, marginBottom: 8, opacity: 0.5 }} />
+          <TerminalIcon style={{ width: 32, height: 32, marginBottom: 8, opacity: 0.5 }} />
           <p>No processes found</p>
           <p style={{ fontSize: 12 }}>Start a process using the API</p>
+          <p style={{ fontSize: 11, marginTop: 8 }}>
+            Use <code style={{ background: "var(--bg-code)", padding: "2px 4px", borderRadius: 3 }}>tty: true</code> for interactive terminal sessions
+          </p>
         </div>
       )}
 
@@ -264,7 +330,7 @@ const ProcessesTab = ({ baseUrl, token }: ProcessesTabProps) => {
                 background: expandedId === process.id ? "var(--bg-secondary)" : "transparent",
                 cursor: "pointer"
               }}
-              onClick={() => toggleExpand(process.id)}
+              onClick={() => toggleExpand(process.id, process)}
             >
               {expandedId === process.id ? (
                 <ChevronDown style={{ width: 14, height: 14, flexShrink: 0 }} />
@@ -277,9 +343,11 @@ const ProcessesTab = ({ baseUrl, token }: ProcessesTabProps) => {
                   <code style={{ fontSize: 12, fontWeight: 500 }}>
                     {process.command} {process.args.join(" ")}
                   </code>
+                  <TtyBadge tty={process.tty} interactive={process.interactive} />
                 </div>
                 <div style={{ fontSize: 11, color: "var(--color-muted)", marginTop: 2 }}>
                   ID: {process.id} • Started: {formatTimestamp(process.startedAt)} • Duration: {formatDuration(process.startedAt, process.stoppedAt)}
+                  {process.terminalSize && ` • ${process.terminalSize.cols}x${process.terminalSize.rows}`}
                 </div>
               </div>
 
@@ -317,55 +385,141 @@ const ProcessesTab = ({ baseUrl, token }: ProcessesTabProps) => {
             </div>
 
             {expandedId === process.id && (
-              <div className="process-logs" style={{ borderTop: "1px solid var(--border-color)" }}>
-                <div style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "8px 12px",
-                  background: "var(--bg-tertiary)",
-                  fontSize: 12
-                }}>
-                  <select
-                    value={logStream}
-                    onChange={e => setLogStream(e.target.value as typeof logStream)}
-                    style={{ fontSize: 11, padding: "2px 4px" }}
-                  >
-                    <option value="combined">Combined</option>
-                    <option value="stdout">stdout</option>
-                    <option value="stderr">stderr</option>
-                  </select>
-                  <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <input
-                      type="checkbox"
-                      checked={stripTimestamps}
-                      onChange={e => setStripTimestamps(e.target.checked)}
+              <div className="process-detail" style={{ borderTop: "1px solid var(--border-color)" }}>
+                {/* View mode tabs for TTY processes */}
+                {process.tty && (
+                  <div style={{
+                    display: "flex",
+                    borderBottom: "1px solid var(--border-color)",
+                    background: "var(--bg-tertiary)",
+                  }}>
+                    <button
+                      onClick={() => {
+                        setViewMode(prev => ({ ...prev, [process.id]: "terminal" }));
+                      }}
+                      style={{
+                        padding: "8px 16px",
+                        border: "none",
+                        background: viewMode[process.id] === "terminal" ? "var(--bg-secondary)" : "transparent",
+                        borderBottom: viewMode[process.id] === "terminal" ? "2px solid var(--color-primary)" : "2px solid transparent",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        fontSize: 12,
+                        color: viewMode[process.id] === "terminal" ? "var(--color-primary)" : "var(--color-muted)",
+                      }}
+                    >
+                      <Monitor style={{ width: 14, height: 14 }} />
+                      Terminal
+                    </button>
+                    <button
+                      onClick={() => {
+                        setViewMode(prev => ({ ...prev, [process.id]: "logs" }));
+                        fetchLogs(process.id);
+                      }}
+                      style={{
+                        padding: "8px 16px",
+                        border: "none",
+                        background: viewMode[process.id] === "logs" ? "var(--bg-secondary)" : "transparent",
+                        borderBottom: viewMode[process.id] === "logs" ? "2px solid var(--color-primary)" : "2px solid transparent",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        fontSize: 12,
+                        color: viewMode[process.id] === "logs" ? "var(--color-primary)" : "var(--color-muted)",
+                      }}
+                    >
+                      <FileText style={{ width: 14, height: 14 }} />
+                      Logs
+                    </button>
+                  </div>
+                )}
+
+                {/* Terminal view */}
+                {process.tty && viewMode[process.id] === "terminal" && process.status === "running" && (
+                  <div style={{ height: 400 }}>
+                    <Terminal
+                      wsUrl={getWsUrl(process.id)}
+                      active={expandedId === process.id}
+                      cols={process.terminalSize?.cols || 80}
+                      rows={process.terminalSize?.rows || 24}
                     />
-                    Strip timestamps
-                  </label>
-                  <button
-                    className="button ghost small"
-                    onClick={() => fetchLogs(process.id)}
-                    disabled={logsLoading[process.id]}
-                  >
-                    <RefreshCw style={{ width: 12, height: 12 }} className={logsLoading[process.id] ? "spinning" : ""} />
-                    Refresh
-                  </button>
-                </div>
-                <pre style={{
-                  margin: 0,
-                  padding: 12,
-                  fontSize: 11,
-                  lineHeight: 1.5,
-                  maxHeight: 300,
-                  overflow: "auto",
-                  background: "var(--bg-code)",
-                  color: "var(--color-code)",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all"
-                }}>
-                  {logsLoading[process.id] ? "Loading..." : (logs[process.id] || "(no logs)")}
-                </pre>
+                  </div>
+                )}
+
+                {/* Terminal placeholder when process is not running */}
+                {process.tty && viewMode[process.id] === "terminal" && process.status !== "running" && (
+                  <div style={{
+                    height: 200,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: "#1a1a1a",
+                    color: "var(--color-muted)",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}>
+                    <Monitor style={{ width: 32, height: 32, opacity: 0.5 }} />
+                    <span>Process is not running</span>
+                    <span style={{ fontSize: 11 }}>Terminal connection unavailable</span>
+                  </div>
+                )}
+
+                {/* Logs view */}
+                {(!process.tty || viewMode[process.id] === "logs") && (
+                  <div className="process-logs">
+                    <div style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: "8px 12px",
+                      background: "var(--bg-tertiary)",
+                      fontSize: 12
+                    }}>
+                      <select
+                        value={logStream}
+                        onChange={e => setLogStream(e.target.value as typeof logStream)}
+                        style={{ fontSize: 11, padding: "2px 4px" }}
+                      >
+                        <option value="combined">Combined</option>
+                        <option value="stdout">stdout</option>
+                        <option value="stderr">stderr</option>
+                      </select>
+                      <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <input
+                          type="checkbox"
+                          checked={stripTimestamps}
+                          onChange={e => setStripTimestamps(e.target.checked)}
+                        />
+                        Strip timestamps
+                      </label>
+                      <button
+                        className="button ghost small"
+                        onClick={() => fetchLogs(process.id)}
+                        disabled={logsLoading[process.id]}
+                      >
+                        <RefreshCw style={{ width: 12, height: 12 }} className={logsLoading[process.id] ? "spinning" : ""} />
+                        Refresh
+                      </button>
+                    </div>
+                    <pre style={{
+                      margin: 0,
+                      padding: 12,
+                      fontSize: 11,
+                      lineHeight: 1.5,
+                      maxHeight: 300,
+                      overflow: "auto",
+                      background: "var(--bg-code)",
+                      color: "var(--color-code)",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-all"
+                    }}>
+                      {logsLoading[process.id] ? "Loading..." : (logs[process.id] || "(no logs)")}
+                    </pre>
+                  </div>
+                )}
               </div>
             )}
           </div>
