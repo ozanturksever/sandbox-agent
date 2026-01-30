@@ -1,6 +1,32 @@
 # syntax=docker/dockerfile:1.10.0
 
 # ============================================================================
+# Build inspector frontend
+# ============================================================================
+FROM node:22-alpine AS inspector-build
+WORKDIR /app
+RUN npm install -g pnpm
+
+# Copy package files for workspaces
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY frontend/packages/inspector/package.json ./frontend/packages/inspector/
+COPY sdks/typescript/package.json ./sdks/typescript/
+
+# Install dependencies
+RUN pnpm install --filter @anthropic-ai/sdk-inspector...
+
+# Copy SDK source (with pre-generated types from docs/openapi.json)
+COPY docs/openapi.json ./docs/
+COPY sdks/typescript ./sdks/typescript
+
+# Build SDK (just tsup, skip generate since types are pre-generated)
+RUN cd sdks/typescript && SKIP_OPENAPI_GEN=1 pnpm exec tsup
+
+# Copy inspector source and build
+COPY frontend/packages/inspector ./frontend/packages/inspector
+RUN cd frontend/packages/inspector && pnpm exec vite build
+
+# ============================================================================
 # AMD64 Builder - Uses cross-tools musl toolchain
 # ============================================================================
 FROM --platform=linux/amd64 rust:1.88.0 AS builder-amd64
@@ -59,10 +85,13 @@ ENV OPENSSL_DIR=/musl \
 WORKDIR /build
 COPY . .
 
+# Copy pre-built inspector frontend
+COPY --from=inspector-build /app/frontend/packages/inspector/dist ./frontend/packages/inspector/dist
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
-    SANDBOX_AGENT_SKIP_INSPECTOR=1 cargo build -p sandbox-agent --release --target x86_64-unknown-linux-musl && \
+    cargo build -p sandbox-agent --release --target x86_64-unknown-linux-musl && \
     cp target/x86_64-unknown-linux-musl/release/sandbox-agent /sandbox-agent
 
 # ============================================================================
@@ -90,10 +119,13 @@ ENV CARGO_INCREMENTAL=0 \
 WORKDIR /build
 COPY . .
 
+# Copy pre-built inspector frontend
+COPY --from=inspector-build /app/frontend/packages/inspector/dist ./frontend/packages/inspector/dist
+
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
-    SANDBOX_AGENT_SKIP_INSPECTOR=1 cargo build -p sandbox-agent --release --target aarch64-unknown-linux-musl && \
+    cargo build -p sandbox-agent --release --target aarch64-unknown-linux-musl && \
     cp target/aarch64-unknown-linux-musl/release/sandbox-agent /sandbox-agent
 
 # ============================================================================
