@@ -2,8 +2,10 @@ import { fetchWithCache } from "./cache.js";
 import { createNormalizedSchema, openApiToJsonSchema, type NormalizedSchema } from "./normalize.js";
 import type { JSONSchema7 } from "json-schema";
 
-const OPENAPI_URL =
-  "https://raw.githubusercontent.com/sst/opencode/dev/packages/sdk/openapi.json";
+const OPENAPI_URLS = [
+  "https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/sdk/openapi.json",
+  "https://raw.githubusercontent.com/sst/opencode/dev/packages/sdk/openapi.json",
+];
 
 // Key schemas we want to extract
 const TARGET_SCHEMAS = [
@@ -28,7 +30,19 @@ interface OpenAPISpec {
 export async function extractOpenCodeSchema(): Promise<NormalizedSchema> {
   console.log("Extracting OpenCode schema from OpenAPI spec...");
 
-  const specText = await fetchWithCache(OPENAPI_URL);
+  let specText: string | null = null;
+  let lastError: Error | null = null;
+  for (const url of OPENAPI_URLS) {
+    try {
+      specText = await fetchWithCache(url);
+      break;
+    } catch (error) {
+      lastError = error as Error;
+    }
+  }
+  if (!specText) {
+    throw lastError ?? new Error("Failed to fetch OpenCode OpenAPI spec");
+  }
   const spec: OpenAPISpec = JSON.parse(specText);
 
   if (!spec.components?.schemas) {

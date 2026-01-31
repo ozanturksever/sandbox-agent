@@ -34,9 +34,12 @@ use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use tokio::time::sleep;
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::trace::TraceLayer;
+use base64::Engine;
+use tracing::Span;
 use utoipa::{Modify, OpenApi, ToSchema};
 
 use crate::agent_server_logs::AgentServerLogs;
+use crate::opencode_compat::{build_opencode_router, OpenCodeAppState};
 use crate::ui;
 use sandbox_agent_agent_management::agents::{
     AgentError as ManagerError, AgentId, AgentManager, InstallOptions, SpawnOptions, StreamingSpawn,
@@ -67,6 +70,10 @@ impl AppState {
             agent_manager,
             session_manager,
         }
+    }
+
+    pub(crate) fn session_manager(&self) -> Arc<SessionManager> {
+        self.session_manager.clone()
     }
 }
 
@@ -126,16 +133,78 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
         ));
     }
 
+    let opencode_state = OpenCodeAppState::new(shared.clone());
+    let mut opencode_router = build_opencode_router(opencode_state.clone());
+    let mut opencode_root_router = build_opencode_router(opencode_state);
+    if shared.auth.token.is_some() {
+        opencode_router = opencode_router.layer(axum::middleware::from_fn_with_state(
+            shared.clone(),
+            require_token,
+        ));
+        opencode_root_router = opencode_root_router.layer(axum::middleware::from_fn_with_state(
+            shared.clone(),
+            require_token,
+        ));
+    }
+
     let mut router = Router::new()
         .route("/", get(get_root))
         .nest("/v1", v1_router)
+        .nest("/opencode", opencode_router)
+        .merge(opencode_root_router)
         .fallback(not_found);
 
     if ui::is_enabled() {
         router = router.merge(ui::router());
     }
 
-    (router.layer(TraceLayer::new_for_http()), shared)
+    let http_logging = match std::env::var("SANDBOX_AGENT_LOG_HTTP") {
+        Ok(value) if value == "0" || value.eq_ignore_ascii_case("false") => false,
+        _ => true,
+    };
+    if http_logging {
+        let include_headers = std::env::var("SANDBOX_AGENT_LOG_HTTP_HEADERS").is_ok();
+        let trace_layer = TraceLayer::new_for_http()
+            .make_span_with(move |req: &Request<_>| {
+                if include_headers {
+                    let mut headers = Vec::new();
+                    for (name, value) in req.headers().iter() {
+                        let name_str = name.as_str();
+                        let display_value = if name_str.eq_ignore_ascii_case("authorization") {
+                            "<redacted>".to_string()
+                        } else {
+                            value.to_str().unwrap_or("<binary>").to_string()
+                        };
+                        headers.push((name_str.to_string(), display_value));
+                    }
+                    tracing::info_span!(
+                        "http.request",
+                        method = %req.method(),
+                        uri = %req.uri(),
+                        headers = ?headers
+                    )
+                } else {
+                    tracing::info_span!(
+                        "http.request",
+                        method = %req.method(),
+                        uri = %req.uri()
+                    )
+                }
+            })
+            .on_request(|_req: &Request<_>, span: &Span| {
+                tracing::info!(parent: span, "request");
+            })
+            .on_response(|res: &Response<_>, latency: Duration, span: &Span| {
+                tracing::info!(
+                    parent: span,
+                    status = %res.status(),
+                    latency_ms = latency.as_millis()
+                );
+            });
+        router = router.layer(trace_layer);
+    }
+
+    (router, shared)
 }
 
 pub async fn shutdown_servers(state: &Arc<AppState>) {
@@ -744,7 +813,7 @@ struct AgentServerManager {
 }
 
 #[derive(Debug)]
-struct SessionManager {
+pub(crate) struct SessionManager {
     agent_manager: Arc<AgentManager>,
     sessions: Mutex<Vec<SessionState>>,
     server_manager: Arc<AgentServerManager>,
@@ -847,9 +916,9 @@ impl CodexServer {
     }
 }
 
-struct SessionSubscription {
-    initial_events: Vec<UniversalEvent>,
-    receiver: broadcast::Receiver<UniversalEvent>,
+pub(crate) struct SessionSubscription {
+    pub(crate) initial_events: Vec<UniversalEvent>,
+    pub(crate) receiver: broadcast::Receiver<UniversalEvent>,
 }
 
 impl ManagedServer {
@@ -1477,7 +1546,7 @@ impl SessionManager {
         logs.read_stderr()
     }
 
-    async fn create_session(
+    pub(crate) async fn create_session(
         self: &Arc<Self>,
         session_id: String,
         request: CreateSessionRequest,
@@ -1604,7 +1673,7 @@ impl SessionManager {
         }
     }
 
-    async fn send_message(
+    pub(crate) async fn send_message(
         self: &Arc<Self>,
         session_id: String,
         message: String,
@@ -1819,7 +1888,7 @@ impl SessionManager {
             .collect()
     }
 
-    async fn subscribe(
+    pub(crate) async fn subscribe(
         &self,
         session_id: &str,
         offset: u64,
@@ -3291,11 +3360,35 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
     if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(value) = value.to_str() {
             let value = value.trim();
-            if let Some(stripped) = value.strip_prefix("Bearer ") {
-                return Some(stripped.to_string());
-            }
-            if let Some(stripped) = value.strip_prefix("Token ") {
-                return Some(stripped.to_string());
+            if let Some((scheme, rest)) = value.split_once(' ') {
+                let scheme_lower = scheme.to_ascii_lowercase();
+                let rest = rest.trim();
+                match scheme_lower.as_str() {
+                    "bearer" | "token" => {
+                        return Some(rest.to_string());
+                    }
+                    "basic" => {
+                        let engines = [
+                            base64::engine::general_purpose::STANDARD,
+                            base64::engine::general_purpose::STANDARD_NO_PAD,
+                            base64::engine::general_purpose::URL_SAFE,
+                            base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                        ];
+                        for engine in engines {
+                            if let Ok(decoded) = engine.decode(rest) {
+                                if let Ok(decoded_str) = String::from_utf8(decoded) {
+                                    if let Some((_, password)) = decoded_str.split_once(':') {
+                                        return Some(password.to_string());
+                                    }
+                                    if !decoded_str.is_empty() {
+                                        return Some(decoded_str);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
