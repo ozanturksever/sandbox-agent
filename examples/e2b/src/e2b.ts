@@ -60,12 +60,6 @@ if (isMainModule) {
     process.exit(0);
   });
 
-  // When running as root in a container, Claude requires interactive permission prompts
-  // (bypass mode is not supported). Set autoApprovePermissions: true to auto-approve,
-  // or leave false for interactive prompts.
-  await runPrompt({
-    baseUrl,
-    autoApprovePermissions: process.env.AUTO_APPROVE_PERMISSIONS === "true",
-  });
+  await runPrompt(baseUrl);
   await cleanup();
 }
