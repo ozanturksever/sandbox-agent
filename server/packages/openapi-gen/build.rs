@@ -13,8 +13,7 @@ fn main() {
     let out_path = Path::new(&out_dir).join("openapi.json");
 
     let openapi = ApiDoc::openapi();
-    let json = serde_json::to_string_pretty(&openapi)
-        .expect("Failed to serialize OpenAPI spec");
+    let json = serde_json::to_string_pretty(&openapi).expect("Failed to serialize OpenAPI spec");
 
     fs::write(&out_path, json).expect("Failed to write OpenAPI spec");
     emit_stdout(&format!(

@@ -81,8 +81,13 @@ async fn multi_turn_snapshots() {
         install_agent(&app.app, config.agent).await;
 
         let session_id = format!("multi-turn-{}", config.agent.as_str());
-        create_session(&app.app, config.agent, &session_id, test_permission_mode(config.agent))
-            .await;
+        create_session(
+            &app.app,
+            config.agent,
+            &session_id,
+            test_permission_mode(config.agent),
+        )
+        .await;
 
         send_message_with_text(&app.app, &session_id, FIRST_PROMPT).await;
         let (first_events, offset) =
@@ -100,13 +105,8 @@ async fn multi_turn_snapshots() {
         );
 
         send_message_with_text(&app.app, &session_id, SECOND_PROMPT).await;
-        let (second_events, _offset) = poll_events_until_from(
-            &app.app,
-            &session_id,
-            offset,
-            Duration::from_secs(120),
-        )
-        .await;
+        let (second_events, _offset) =
+            poll_events_until_from(&app.app, &session_id, offset, Duration::from_secs(120)).await;
         let second_events = truncate_after_first_stop(&second_events);
         assert!(
             !second_events.is_empty(),

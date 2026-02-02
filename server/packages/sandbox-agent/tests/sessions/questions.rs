@@ -55,9 +55,7 @@ async fn question_flow_snapshots() {
             let status = send_status(
                 &app.app,
                 Method::POST,
-                &format!(
-                    "/v1/sessions/{question_reply_session}/questions/{question_id}/reply"
-                ),
+                &format!("/v1/sessions/{question_reply_session}/questions/{question_id}/reply"),
                 Some(json!({ "answers": answers })),
             )
             .await;
@@ -67,9 +65,7 @@ async fn question_flow_snapshots() {
             let (status, payload) = send_json(
                 &app.app,
                 Method::POST,
-                &format!(
-                    "/v1/sessions/{question_reply_session}/questions/missing-question/reply"
-                ),
+                &format!("/v1/sessions/{question_reply_session}/questions/missing-question/reply"),
                 Some(json!({ "answers": [] })),
             )
             .await;
@@ -92,7 +88,11 @@ async fn question_flow_snapshots() {
             Some(json!({ "message": QUESTION_PROMPT })),
         )
         .await;
-        assert_eq!(status, StatusCode::NO_CONTENT, "send question prompt reject");
+        assert_eq!(
+            status,
+            StatusCode::NO_CONTENT,
+            "send question prompt reject"
+        );
 
         let reject_events = poll_events_until_match(
             &app.app,
@@ -108,9 +108,7 @@ async fn question_flow_snapshots() {
             let status = send_status(
                 &app.app,
                 Method::POST,
-                &format!(
-                    "/v1/sessions/{question_reject_session}/questions/{question_id}/reject"
-                ),
+                &format!("/v1/sessions/{question_reject_session}/questions/{question_id}/reject"),
                 None,
             )
             .await;
@@ -126,7 +124,10 @@ async fn question_flow_snapshots() {
                 None,
             )
             .await;
-            assert!(!status.is_success(), "missing question id reject should error");
+            assert!(
+                !status.is_success(),
+                "missing question id reject should error"
+            );
             assert_session_snapshot(
                 "question_reject_missing",
                 json!({

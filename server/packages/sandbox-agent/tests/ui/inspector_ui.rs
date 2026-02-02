@@ -1,9 +1,9 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use sandbox_agent_agent_management::agents::AgentManager;
 use sandbox_agent::router::{build_router, AppState, AuthConfig};
 use sandbox_agent::ui;
+use sandbox_agent_agent_management::agents::AgentManager;
 use tempfile::TempDir;
 use tower::util::ServiceExt;
 
@@ -22,10 +22,7 @@ async fn serves_inspector_ui() {
         .uri("/ui")
         .body(Body::empty())
         .expect("build request");
-    let response = app
-        .oneshot(request)
-        .await
-        .expect("request handled");
+    let response = app.oneshot(request).await.expect("request handled");
 
     assert_eq!(response.status(), StatusCode::OK);
 

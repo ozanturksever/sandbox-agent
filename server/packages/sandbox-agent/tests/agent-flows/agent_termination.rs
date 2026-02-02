@@ -1,11 +1,11 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use axum::http::Method;
 use common::*;
 use sandbox_agent_agent_management::testing::test_agents_from_env;
-use std::time::Duration;
-use axum::http::Method;
 use serde_json::json;
+use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_termination() {
@@ -26,13 +26,20 @@ async fn agent_termination() {
             None,
         )
         .await;
-        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "terminate session");
+        assert_eq!(
+            status,
+            axum::http::StatusCode::NO_CONTENT,
+            "terminate session"
+        );
 
         let events = poll_events_until(&app.app, &session_id, Duration::from_secs(30), |events| {
             has_event_type(events, "session.ended")
         })
         .await;
-        assert!(has_event_type(&events, "session.ended"), "missing session.ended");
+        assert!(
+            has_event_type(&events, "session.ended"),
+            "missing session.ended"
+        );
 
         let status = send_status(
             &app.app,
@@ -41,6 +48,9 @@ async fn agent_termination() {
             Some(json!({ "message": PROMPT })),
         )
         .await;
-        assert!(!status.is_success(), "terminated session should reject messages");
+        assert!(
+            !status.is_success(),
+            "terminated session should reject messages"
+        );
     }
 }

@@ -4,20 +4,9 @@ use serde_json::Value;
 
 use crate::amp as schema;
 use crate::{
-    ContentPart,
-    ErrorData,
-    EventConversion,
-    ItemDeltaData,
-    ItemEventData,
-    ItemKind,
-    ItemRole,
-    ItemStatus,
-    SessionEndedData,
-    SessionEndReason,
-    TerminatedBy,
-    UniversalEventData,
-    UniversalEventType,
-    UniversalItem,
+    ContentPart, ErrorData, EventConversion, ItemDeltaData, ItemEventData, ItemKind, ItemRole,
+    ItemStatus, SessionEndReason, SessionEndedData, TerminatedBy, UniversalEventData,
+    UniversalEventType, UniversalItem,
 };
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(1);
@@ -27,7 +16,9 @@ fn next_temp_id(prefix: &str) -> String {
     format!("{prefix}_{id}")
 }
 
-pub fn event_to_universal(event: &schema::StreamJsonMessage) -> Result<Vec<EventConversion>, String> {
+pub fn event_to_universal(
+    event: &schema::StreamJsonMessage,
+) -> Result<Vec<EventConversion>, String> {
     let mut events = Vec::new();
     match event.type_ {
         schema::StreamJsonMessageType::Message => {
@@ -49,12 +40,17 @@ pub fn event_to_universal(event: &schema::StreamJsonMessage) -> Result<Vec<Event
                 let arguments = match call.arguments {
                     schema::ToolCallArguments::Variant0(text) => text,
                     schema::ToolCallArguments::Variant1(map) => {
-                        serde_json::to_string(&Value::Object(map)).unwrap_or_else(|_| "{}".to_string())
+                        serde_json::to_string(&Value::Object(map))
+                            .unwrap_or_else(|_| "{}".to_string())
                     }
                 };
                 (call.name, arguments, call.id)
             } else {
-                ("unknown".to_string(), "{}".to_string(), next_temp_id("tmp_amp_tool"))
+                (
+                    "unknown".to_string(),
+                    "{}".to_string(),
+                    next_temp_id("tmp_amp_tool"),
+                )
             };
             let item = UniversalItem {
                 item_id: next_temp_id("tmp_amp_tool_call"),
@@ -83,16 +79,16 @@ pub fn event_to_universal(event: &schema::StreamJsonMessage) -> Result<Vec<Event
                 parent_id: None,
                 kind: ItemKind::ToolResult,
                 role: Some(ItemRole::Tool),
-                content: vec![ContentPart::ToolResult {
-                    call_id,
-                    output,
-                }],
+                content: vec![ContentPart::ToolResult { call_id, output }],
                 status: ItemStatus::Completed,
             };
             events.extend(item_events(item));
         }
         schema::StreamJsonMessageType::Error => {
-            let message = event.error.clone().unwrap_or_else(|| "amp error".to_string());
+            let message = event
+                .error
+                .clone()
+                .unwrap_or_else(|| "amp error".to_string());
             events.push(EventConversion::new(
                 UniversalEventType::Error,
                 UniversalEventData::Error(ErrorData {

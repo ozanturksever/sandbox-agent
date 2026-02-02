@@ -28,11 +28,7 @@ async fn register_and_unregister_sessions() {
         .register_session(AgentId::Codex, "sess-1", Some("thread-1"))
         .await;
 
-    assert!(
-        harness
-            .has_session_mapping(AgentId::Codex, "sess-1")
-            .await
-    );
+    assert!(harness.has_session_mapping(AgentId::Codex, "sess-1").await);
     assert_eq!(
         harness
             .native_mapping(AgentId::Codex, "thread-1")
@@ -45,17 +41,11 @@ async fn register_and_unregister_sessions() {
         .unregister_session(AgentId::Codex, "sess-1", Some("thread-1"))
         .await;
 
-    assert!(
-        !harness
-            .has_session_mapping(AgentId::Codex, "sess-1")
-            .await
-    );
-    assert!(
-        harness
-            .native_mapping(AgentId::Codex, "thread-1")
-            .await
-            .is_none()
-    );
+    assert!(!harness.has_session_mapping(AgentId::Codex, "sess-1").await);
+    assert!(harness
+        .native_mapping(AgentId::Codex, "thread-1")
+        .await
+        .is_none());
 }
 
 #[tokio::test]
@@ -92,9 +82,7 @@ async fn handle_process_exit_marks_error_and_ends_sessions() {
     harness
         .register_session(AgentId::Codex, "sess-1", Some("thread-1"))
         .await;
-    harness
-        .insert_stdio_server(AgentId::Codex, None, 1)
-        .await;
+    harness.insert_stdio_server(AgentId::Codex, None, 1).await;
 
     harness
         .handle_process_exit(AgentId::Codex, 1, exit_status(7))
@@ -104,13 +92,11 @@ async fn handle_process_exit_marks_error_and_ends_sessions() {
         harness.server_status(AgentId::Codex).await,
         Some(sandbox_agent::router::ServerStatus::Error)
     ));
-    assert!(
-        harness
-            .server_last_error(AgentId::Codex)
-            .await
-            .unwrap_or_default()
-            .contains("exited")
-    );
+    assert!(harness
+        .server_last_error(AgentId::Codex)
+        .await
+        .unwrap_or_default()
+        .contains("exited"));
     assert!(harness.session_ended("sess-1").await);
     assert!(matches!(
         harness.session_end_reason("sess-1").await,

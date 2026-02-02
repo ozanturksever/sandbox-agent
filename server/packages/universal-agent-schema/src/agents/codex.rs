@@ -2,22 +2,9 @@ use serde_json::Value;
 
 use crate::codex as schema;
 use crate::{
-    ContentPart,
-    ErrorData,
-    EventConversion,
-    ItemDeltaData,
-    ItemEventData,
-    ItemKind,
-    ItemRole,
-    ItemStatus,
-    ReasoningVisibility,
-    SessionEndedData,
-    SessionEndReason,
-    SessionStartedData,
-    TerminatedBy,
-    UniversalEventData,
-    UniversalEventType,
-    UniversalItem,
+    ContentPart, ErrorData, EventConversion, ItemDeltaData, ItemEventData, ItemKind, ItemRole,
+    ItemStatus, ReasoningVisibility, SessionEndReason, SessionEndedData, SessionStartedData,
+    TerminatedBy, UniversalEventData, UniversalEventType, UniversalItem,
 };
 
 /// Convert a Codex ServerNotification to universal events.
@@ -30,14 +17,12 @@ pub fn notification_to_universal(
             let data = SessionStartedData {
                 metadata: serde_json::to_value(&params.thread).ok(),
             };
-            Ok(vec![
-                EventConversion::new(
-                    UniversalEventType::SessionStarted,
-                    UniversalEventData::SessionStarted(data),
-                )
-                .with_native_session(Some(params.thread.id.clone()))
-                .with_raw(raw),
-            ])
+            Ok(vec![EventConversion::new(
+                UniversalEventType::SessionStarted,
+                UniversalEventData::SessionStarted(data),
+            )
+            .with_native_session(Some(params.thread.id.clone()))
+            .with_raw(raw)])
         }
         schema::ServerNotification::ThreadCompacted(params) => Ok(vec![status_event(
             "thread.compacted",
@@ -77,28 +62,24 @@ pub fn notification_to_universal(
         )]),
         schema::ServerNotification::ItemStarted(params) => {
             let item = thread_item_to_item(&params.item, ItemStatus::InProgress);
-            Ok(vec![
-                EventConversion::new(
-                    UniversalEventType::ItemStarted,
-                    UniversalEventData::Item(ItemEventData { item }),
-                )
-                .with_native_session(Some(params.thread_id.clone()))
-                .with_raw(raw),
-            ])
+            Ok(vec![EventConversion::new(
+                UniversalEventType::ItemStarted,
+                UniversalEventData::Item(ItemEventData { item }),
+            )
+            .with_native_session(Some(params.thread_id.clone()))
+            .with_raw(raw)])
         }
         schema::ServerNotification::ItemCompleted(params) => {
             let item = thread_item_to_item(&params.item, ItemStatus::Completed);
-            Ok(vec![
-                EventConversion::new(
-                    UniversalEventType::ItemCompleted,
-                    UniversalEventData::Item(ItemEventData { item }),
-                )
-                .with_native_session(Some(params.thread_id.clone()))
-                .with_raw(raw),
-            ])
+            Ok(vec![EventConversion::new(
+                UniversalEventType::ItemCompleted,
+                UniversalEventData::Item(ItemEventData { item }),
+            )
+            .with_native_session(Some(params.thread_id.clone()))
+            .with_raw(raw)])
         }
-        schema::ServerNotification::ItemAgentMessageDelta(params) => Ok(vec![
-            EventConversion::new(
+        schema::ServerNotification::ItemAgentMessageDelta(params) => {
+            Ok(vec![EventConversion::new(
                 UniversalEventType::ItemDelta,
                 UniversalEventData::ItemDelta(ItemDeltaData {
                     item_id: String::new(),
@@ -107,10 +88,10 @@ pub fn notification_to_universal(
                 }),
             )
             .with_native_session(Some(params.thread_id.clone()))
-            .with_raw(raw),
-        ]),
-        schema::ServerNotification::ItemReasoningTextDelta(params) => Ok(vec![
-            EventConversion::new(
+            .with_raw(raw)])
+        }
+        schema::ServerNotification::ItemReasoningTextDelta(params) => {
+            Ok(vec![EventConversion::new(
                 UniversalEventType::ItemDelta,
                 UniversalEventData::ItemDelta(ItemDeltaData {
                     item_id: String::new(),
@@ -119,10 +100,10 @@ pub fn notification_to_universal(
                 }),
             )
             .with_native_session(Some(params.thread_id.clone()))
-            .with_raw(raw),
-        ]),
-        schema::ServerNotification::ItemReasoningSummaryTextDelta(params) => Ok(vec![
-            EventConversion::new(
+            .with_raw(raw)])
+        }
+        schema::ServerNotification::ItemReasoningSummaryTextDelta(params) => {
+            Ok(vec![EventConversion::new(
                 UniversalEventType::ItemDelta,
                 UniversalEventData::ItemDelta(ItemDeltaData {
                     item_id: String::new(),
@@ -131,10 +112,10 @@ pub fn notification_to_universal(
                 }),
             )
             .with_native_session(Some(params.thread_id.clone()))
-            .with_raw(raw),
-        ]),
-        schema::ServerNotification::ItemCommandExecutionOutputDelta(params) => Ok(vec![
-            EventConversion::new(
+            .with_raw(raw)])
+        }
+        schema::ServerNotification::ItemCommandExecutionOutputDelta(params) => {
+            Ok(vec![EventConversion::new(
                 UniversalEventType::ItemDelta,
                 UniversalEventData::ItemDelta(ItemDeltaData {
                     item_id: String::new(),
@@ -143,10 +124,10 @@ pub fn notification_to_universal(
                 }),
             )
             .with_native_session(Some(params.thread_id.clone()))
-            .with_raw(raw),
-        ]),
-        schema::ServerNotification::ItemFileChangeOutputDelta(params) => Ok(vec![
-            EventConversion::new(
+            .with_raw(raw)])
+        }
+        schema::ServerNotification::ItemFileChangeOutputDelta(params) => {
+            Ok(vec![EventConversion::new(
                 UniversalEventType::ItemDelta,
                 UniversalEventData::ItemDelta(ItemDeltaData {
                     item_id: String::new(),
@@ -155,10 +136,10 @@ pub fn notification_to_universal(
                 }),
             )
             .with_native_session(Some(params.thread_id.clone()))
-            .with_raw(raw),
-        ]),
-        schema::ServerNotification::ItemCommandExecutionTerminalInteraction(params) => Ok(vec![
-            EventConversion::new(
+            .with_raw(raw)])
+        }
+        schema::ServerNotification::ItemCommandExecutionTerminalInteraction(params) => {
+            Ok(vec![EventConversion::new(
                 UniversalEventType::ItemDelta,
                 UniversalEventData::ItemDelta(ItemDeltaData {
                     item_id: String::new(),
@@ -167,33 +148,34 @@ pub fn notification_to_universal(
                 }),
             )
             .with_native_session(Some(params.thread_id.clone()))
-            .with_raw(raw),
-        ]),
+            .with_raw(raw)])
+        }
         schema::ServerNotification::ItemMcpToolCallProgress(params) => Ok(vec![status_event(
             "mcp.progress",
             serde_json::to_string(params).ok(),
             Some(params.thread_id.clone()),
             raw,
         )]),
-        schema::ServerNotification::ItemReasoningSummaryPartAdded(params) => Ok(vec![
-            status_event(
+        schema::ServerNotification::ItemReasoningSummaryPartAdded(params) => {
+            Ok(vec![status_event(
                 "reasoning.summary.part_added",
                 serde_json::to_string(params).ok(),
                 Some(params.thread_id.clone()),
                 raw,
-            ),
-        ]),
+            )])
+        }
         schema::ServerNotification::Error(params) => {
             let data = ErrorData {
                 message: params.error.message.clone(),
                 code: None,
                 details: serde_json::to_value(params).ok(),
             };
-            Ok(vec![
-                EventConversion::new(UniversalEventType::Error, UniversalEventData::Error(data))
-                    .with_native_session(Some(params.thread_id.clone()))
-                    .with_raw(raw),
-            ])
+            Ok(vec![EventConversion::new(
+                UniversalEventType::Error,
+                UniversalEventData::Error(data),
+            )
+            .with_native_session(Some(params.thread_id.clone()))
+            .with_raw(raw)])
         }
         schema::ServerNotification::RawResponseItemCompleted(params) => Ok(vec![status_event(
             "raw.item.completed",
@@ -239,7 +221,11 @@ fn thread_item_to_item(item: &schema::ThreadItem, status: ItemStatus) -> Univers
             content: vec![ContentPart::Text { text: text.clone() }],
             status,
         },
-        schema::ThreadItem::Reasoning { content, id, summary } => {
+        schema::ThreadItem::Reasoning {
+            content,
+            id,
+            summary,
+        } => {
             let mut parts = Vec::new();
             for line in content {
                 parts.push(ContentPart::Reasoning {
@@ -295,7 +281,11 @@ fn thread_item_to_item(item: &schema::ThreadItem, status: ItemStatus) -> Univers
                 status,
             }
         }
-        schema::ThreadItem::FileChange { changes, id, status: file_status } => UniversalItem {
+        schema::ThreadItem::FileChange {
+            changes,
+            id,
+            status: file_status,
+        } => UniversalItem {
             item_id: String::new(),
             native_item_id: Some(id.clone()),
             parent_id: None,
@@ -339,7 +329,8 @@ fn thread_item_to_item(item: &schema::ThreadItem, status: ItemStatus) -> Univers
                     output,
                 });
             } else {
-                let arguments = serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_string());
+                let arguments =
+                    serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_string());
                 parts.push(ContentPart::ToolCall {
                     name: format!("{server}.{tool}"),
                     arguments,
@@ -433,18 +424,12 @@ fn thread_item_to_item(item: &schema::ThreadItem, status: ItemStatus) -> Univers
             }],
             status,
         },
-        schema::ThreadItem::EnteredReviewMode { id, review } => status_item_internal(
-            id,
-            "review.entered",
-            Some(review.clone()),
-            status,
-        ),
-        schema::ThreadItem::ExitedReviewMode { id, review } => status_item_internal(
-            id,
-            "review.exited",
-            Some(review.clone()),
-            status,
-        ),
+        schema::ThreadItem::EnteredReviewMode { id, review } => {
+            status_item_internal(id, "review.entered", Some(review.clone()), status)
+        }
+        schema::ThreadItem::ExitedReviewMode { id, review } => {
+            status_item_internal(id, "review.exited", Some(review.clone()), status)
+        }
     }
 }
 
@@ -463,7 +448,12 @@ fn status_item(label: &str, detail: Option<String>) -> UniversalItem {
     }
 }
 
-fn status_item_internal(id: &str, label: &str, detail: Option<String>, status: ItemStatus) -> UniversalItem {
+fn status_item_internal(
+    id: &str,
+    label: &str,
+    detail: Option<String>,
+    status: ItemStatus,
+) -> UniversalItem {
     UniversalItem {
         item_id: String::new(),
         native_item_id: Some(id.to_string()),

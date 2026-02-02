@@ -37,7 +37,11 @@ fn serve_path(path: &str) -> Response {
     };
 
     let trimmed = path.trim_start_matches('/');
-    let target = if trimmed.is_empty() { "index.html" } else { trimmed };
+    let target = if trimmed.is_empty() {
+        "index.html"
+    } else {
+        trimmed
+    };
 
     if let Some(file) = dir.get_file(target) {
         return file_response(file);

@@ -3,15 +3,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{
-    Child,
-    ChildStderr,
-    ChildStdin,
-    ChildStdout,
-    Command,
-    ExitStatus,
-    Stdio,
-};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use flate2::read::GzDecoder;
@@ -124,17 +116,18 @@ impl AgentManager {
         })
     }
 
-    pub fn with_platform(
-        install_dir: impl Into<PathBuf>,
-        platform: Platform,
-    ) -> Self {
+    pub fn with_platform(install_dir: impl Into<PathBuf>, platform: Platform) -> Self {
         Self {
             install_dir: install_dir.into(),
             platform,
         }
     }
 
-    pub fn install(&self, agent: AgentId, options: InstallOptions) -> Result<InstallResult, AgentError> {
+    pub fn install(
+        &self,
+        agent: AgentId,
+        options: InstallOptions,
+    ) -> Result<InstallResult, AgentError> {
         let install_path = self.binary_path(agent);
         if !options.reinstall {
             if let Ok(existing_path) = self.resolve_binary(agent) {
@@ -148,9 +141,15 @@ impl AgentManager {
         fs::create_dir_all(&self.install_dir)?;
 
         match agent {
-            AgentId::Claude => install_claude(&install_path, self.platform, options.version.as_deref())?,
-            AgentId::Codex => install_codex(&install_path, self.platform, options.version.as_deref())?,
-            AgentId::Opencode => install_opencode(&install_path, self.platform, options.version.as_deref())?,
+            AgentId::Claude => {
+                install_claude(&install_path, self.platform, options.version.as_deref())?
+            }
+            AgentId::Codex => {
+                install_codex(&install_path, self.platform, options.version.as_deref())?
+            }
+            AgentId::Opencode => {
+                install_opencode(&install_path, self.platform, options.version.as_deref())?
+            }
             AgentId::Amp => install_amp(&install_path, self.platform, options.version.as_deref())?,
             AgentId::Mock => {
                 if !install_path.exists() {
@@ -256,10 +255,7 @@ impl AgentManager {
                 command.arg("app-server");
             }
             AgentId::Opencode => {
-                command
-                    .arg("run")
-                    .arg("--format")
-                    .arg("json");
+                command.arg("run").arg("--format").arg("json");
                 if let Some(model) = options.model.as_deref() {
                     command.arg("-m").arg(model);
                 }
@@ -346,10 +342,15 @@ impl AgentManager {
 
     fn spawn_codex_app_server(&self, options: SpawnOptions) -> Result<SpawnResult, AgentError> {
         if options.session_id.is_some() {
-            return Err(AgentError::ResumeUnsupported { agent: AgentId::Codex });
+            return Err(AgentError::ResumeUnsupported {
+                agent: AgentId::Codex,
+            });
         }
         let mut command = self.build_command(AgentId::Codex, &options)?;
-        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         for (key, value) in options.env {
             command.env(key, value);
         }
@@ -417,11 +418,11 @@ impl AgentManager {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            let message: codex_schema::JsonrpcMessage =
-                match serde_json::from_value(value.clone()) {
-                    Ok(message) => message,
-                    Err(_) => continue,
-                };
+            let message: codex_schema::JsonrpcMessage = match serde_json::from_value(value.clone())
+            {
+                Ok(message) => message,
+                Err(_) => continue,
+            };
             match message {
                 codex_schema::JsonrpcMessage::Response(response) => {
                     let response_id = response.id.to_string();
@@ -443,11 +444,16 @@ impl AgentManager {
                         params.cwd = cwd.clone();
                         send_json_line(
                             &mut stdin,
-                            &codex_schema::ClientRequest::ThreadStart { id: request_id, params },
+                            &codex_schema::ClientRequest::ThreadStart {
+                                id: request_id,
+                                params,
+                            },
                         )?;
                         thread_start_id = Some(request_id_str);
                         thread_start_sent = true;
-                    } else if thread_start_id.as_deref() == Some(&response_id) && thread_id.is_none() {
+                    } else if thread_start_id.as_deref() == Some(&response_id)
+                        && thread_id.is_none()
+                    {
                         thread_id = codex_thread_id_from_response(&response.result);
                     }
                     events.push(value);
@@ -466,8 +472,11 @@ impl AgentManager {
                         ) {
                             completed = true;
                         }
-                        if let codex_schema::ServerNotification::ItemCompleted(params) = &notification {
-                            if matches!(params.item, codex_schema::ThreadItem::AgentMessage { .. }) {
+                        if let codex_schema::ServerNotification::ItemCompleted(params) =
+                            &notification
+                        {
+                            if matches!(params.item, codex_schema::ThreadItem::AgentMessage { .. })
+                            {
                                 completed = true;
                             }
                         }
@@ -809,17 +818,35 @@ fn codex_thread_id_from_notification(
         codex_schema::ServerNotification::TurnCompleted(params) => Some(params.thread_id.clone()),
         codex_schema::ServerNotification::ItemStarted(params) => Some(params.thread_id.clone()),
         codex_schema::ServerNotification::ItemCompleted(params) => Some(params.thread_id.clone()),
-        codex_schema::ServerNotification::ItemAgentMessageDelta(params) => Some(params.thread_id.clone()),
-        codex_schema::ServerNotification::ItemReasoningTextDelta(params) => Some(params.thread_id.clone()),
-        codex_schema::ServerNotification::ItemReasoningSummaryTextDelta(params) => Some(params.thread_id.clone()),
-        codex_schema::ServerNotification::ItemCommandExecutionOutputDelta(params) => Some(params.thread_id.clone()),
-        codex_schema::ServerNotification::ItemFileChangeOutputDelta(params) => Some(params.thread_id.clone()),
-        codex_schema::ServerNotification::ItemMcpToolCallProgress(params) => Some(params.thread_id.clone()),
-        codex_schema::ServerNotification::ThreadTokenUsageUpdated(params) => Some(params.thread_id.clone()),
+        codex_schema::ServerNotification::ItemAgentMessageDelta(params) => {
+            Some(params.thread_id.clone())
+        }
+        codex_schema::ServerNotification::ItemReasoningTextDelta(params) => {
+            Some(params.thread_id.clone())
+        }
+        codex_schema::ServerNotification::ItemReasoningSummaryTextDelta(params) => {
+            Some(params.thread_id.clone())
+        }
+        codex_schema::ServerNotification::ItemCommandExecutionOutputDelta(params) => {
+            Some(params.thread_id.clone())
+        }
+        codex_schema::ServerNotification::ItemFileChangeOutputDelta(params) => {
+            Some(params.thread_id.clone())
+        }
+        codex_schema::ServerNotification::ItemMcpToolCallProgress(params) => {
+            Some(params.thread_id.clone())
+        }
+        codex_schema::ServerNotification::ThreadTokenUsageUpdated(params) => {
+            Some(params.thread_id.clone())
+        }
         codex_schema::ServerNotification::TurnDiffUpdated(params) => Some(params.thread_id.clone()),
         codex_schema::ServerNotification::TurnPlanUpdated(params) => Some(params.thread_id.clone()),
-        codex_schema::ServerNotification::ItemCommandExecutionTerminalInteraction(params) => Some(params.thread_id.clone()),
-        codex_schema::ServerNotification::ItemReasoningSummaryPartAdded(params) => Some(params.thread_id.clone()),
+        codex_schema::ServerNotification::ItemCommandExecutionTerminalInteraction(params) => {
+            Some(params.thread_id.clone())
+        }
+        codex_schema::ServerNotification::ItemReasoningSummaryPartAdded(params) => {
+            Some(params.thread_id.clone())
+        }
         codex_schema::ServerNotification::ThreadCompacted(params) => Some(params.thread_id.clone()),
         _ => None,
     }
@@ -859,36 +886,36 @@ fn extract_session_id(agent: AgentId, events: &[Value]) -> Option<String> {
                     return Some(id.to_string());
                 }
             }
-        AgentId::Codex => {
-            if let Ok(notification) =
-                serde_json::from_value::<codex_schema::ServerNotification>(event.clone())
-            {
-                match notification {
-                    codex_schema::ServerNotification::ThreadStarted(params) => {
-                        return Some(params.thread.id);
+            AgentId::Codex => {
+                if let Ok(notification) =
+                    serde_json::from_value::<codex_schema::ServerNotification>(event.clone())
+                {
+                    match notification {
+                        codex_schema::ServerNotification::ThreadStarted(params) => {
+                            return Some(params.thread.id);
+                        }
+                        codex_schema::ServerNotification::TurnStarted(params) => {
+                            return Some(params.thread_id);
+                        }
+                        codex_schema::ServerNotification::TurnCompleted(params) => {
+                            return Some(params.thread_id);
+                        }
+                        codex_schema::ServerNotification::ItemStarted(params) => {
+                            return Some(params.thread_id);
+                        }
+                        codex_schema::ServerNotification::ItemCompleted(params) => {
+                            return Some(params.thread_id);
+                        }
+                        _ => {}
                     }
-                    codex_schema::ServerNotification::TurnStarted(params) => {
-                        return Some(params.thread_id);
-                    }
-                    codex_schema::ServerNotification::TurnCompleted(params) => {
-                        return Some(params.thread_id);
-                    }
-                    codex_schema::ServerNotification::ItemStarted(params) => {
-                        return Some(params.thread_id);
-                    }
-                    codex_schema::ServerNotification::ItemCompleted(params) => {
-                        return Some(params.thread_id);
-                    }
-                    _ => {}
+                }
+                if let Some(id) = event.get("thread_id").and_then(Value::as_str) {
+                    return Some(id.to_string());
+                }
+                if let Some(id) = event.get("threadId").and_then(Value::as_str) {
+                    return Some(id.to_string());
                 }
             }
-            if let Some(id) = event.get("thread_id").and_then(Value::as_str) {
-                return Some(id.to_string());
-            }
-            if let Some(id) = event.get("threadId").and_then(Value::as_str) {
-                return Some(id.to_string());
-            }
-        }
             AgentId::Opencode => {
                 if let Some(id) = event.get("session_id").and_then(Value::as_str) {
                     return Some(id.to_string());
@@ -902,7 +929,8 @@ fn extract_session_id(agent: AgentId, events: &[Value]) -> Option<String> {
                 if let Some(id) = extract_nested_string(event, &["properties", "sessionID"]) {
                     return Some(id);
                 }
-                if let Some(id) = extract_nested_string(event, &["properties", "part", "sessionID"]) {
+                if let Some(id) = extract_nested_string(event, &["properties", "part", "sessionID"])
+                {
                     return Some(id);
                 }
                 if let Some(id) = extract_nested_string(event, &["session", "id"]) {
@@ -925,7 +953,9 @@ fn extract_result_text(agent: AgentId, events: &[Value]) -> Option<String> {
                 if let Some(result) = event.get("result").and_then(Value::as_str) {
                     return Some(result.to_string());
                 }
-                if let Some(text) = extract_nested_string(event, &["message", "content", "0", "text"]) {
+                if let Some(text) =
+                    extract_nested_string(event, &["message", "content", "0", "text"])
+                {
                     return Some(text);
                 }
             }
@@ -974,7 +1004,9 @@ fn extract_result_text(agent: AgentId, events: &[Value]) -> Option<String> {
                     if let Some(delta) = extract_nested_string(event, &["properties", "delta"]) {
                         buffer.push_str(&delta);
                     }
-                    if let Some(content) = extract_nested_string(event, &["properties", "part", "content"]) {
+                    if let Some(content) =
+                        extract_nested_string(event, &["properties", "part", "content"])
+                    {
                         buffer.push_str(&content);
                     }
                 }
@@ -1178,14 +1210,19 @@ fn download_bytes(url: &Url) -> Result<Vec<u8>, AgentError> {
     Ok(bytes)
 }
 
-fn install_claude(path: &Path, platform: Platform, version: Option<&str>) -> Result<(), AgentError> {
+fn install_claude(
+    path: &Path,
+    platform: Platform,
+    version: Option<&str>,
+) -> Result<(), AgentError> {
     let version = match version {
         Some(version) => version.to_string(),
         None => {
             let url = Url::parse(
                 "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest",
             )?;
-            let text = String::from_utf8(download_bytes(&url)?).map_err(|err| AgentError::ExtractFailed(err.to_string()))?;
+            let text = String::from_utf8(download_bytes(&url)?)
+                .map_err(|err| AgentError::ExtractFailed(err.to_string()))?;
             text.trim().to_string()
         }
     };
@@ -1210,8 +1247,11 @@ fn install_amp(path: &Path, platform: Platform, version: Option<&str>) -> Result
     let version = match version {
         Some(version) => version.to_string(),
         None => {
-            let url = Url::parse("https://storage.googleapis.com/amp-public-assets-prod-0/cli/cli-version.txt")?;
-            let text = String::from_utf8(download_bytes(&url)?).map_err(|err| AgentError::ExtractFailed(err.to_string()))?;
+            let url = Url::parse(
+                "https://storage.googleapis.com/amp-public-assets-prod-0/cli/cli-version.txt",
+            )?;
+            let text = String::from_utf8(download_bytes(&url)?)
+                .map_err(|err| AgentError::ExtractFailed(err.to_string()))?;
             text.trim().to_string()
         }
     };
@@ -1261,7 +1301,11 @@ fn install_codex(path: &Path, platform: Platform, version: Option<&str>) -> Resu
     Ok(())
 }
 
-fn install_opencode(path: &Path, platform: Platform, version: Option<&str>) -> Result<(), AgentError> {
+fn install_opencode(
+    path: &Path,
+    platform: Platform,
+    version: Option<&str>,
+) -> Result<(), AgentError> {
     match platform {
         Platform::MacosArm64 => {
             let url = match version {
@@ -1317,7 +1361,8 @@ fn install_opencode(path: &Path, platform: Platform, version: Option<&str>) -> R
 fn install_zip_binary(path: &Path, url: &Url, binary_name: &str) -> Result<(), AgentError> {
     let bytes = download_bytes(url)?;
     let reader = io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(reader).map_err(|err| AgentError::ExtractFailed(err.to_string()))?;
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|err| AgentError::ExtractFailed(err.to_string()))?;
     let temp_dir = tempfile::tempdir()?;
     for i in 0..archive.len() {
         let mut file = archive

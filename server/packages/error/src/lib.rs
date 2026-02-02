@@ -123,7 +123,10 @@ pub enum SandboxError {
     #[error("agent not installed: {agent}")]
     AgentNotInstalled { agent: String },
     #[error("install failed: {agent}")]
-    InstallFailed { agent: String, stderr: Option<String> },
+    InstallFailed {
+        agent: String,
+        stderr: Option<String>,
+    },
     #[error("agent process exited: {agent}")]
     AgentProcessExited {
         agent: String,
@@ -167,9 +170,7 @@ impl SandboxError {
     pub fn to_agent_error(&self) -> AgentError {
         let (agent, session_id, details) = match self {
             Self::InvalidRequest { .. } => (None, None, None),
-            Self::UnsupportedAgent { agent } => {
-                (Some(agent.clone()), None, None)
-            }
+            Self::UnsupportedAgent { agent } => (Some(agent.clone()), None, None),
             Self::AgentNotInstalled { agent } => (Some(agent.clone()), None, None),
             Self::InstallFailed { agent, stderr } => {
                 let mut map = Map::new();
@@ -179,7 +180,11 @@ impl SandboxError {
                 (
                     Some(agent.clone()),
                     None,
-                    if map.is_empty() { None } else { Some(Value::Object(map)) },
+                    if map.is_empty() {
+                        None
+                    } else {
+                        Some(Value::Object(map))
+                    },
                 )
             }
             Self::AgentProcessExited {
@@ -200,7 +205,11 @@ impl SandboxError {
                 (
                     Some(agent.clone()),
                     None,
-                    if map.is_empty() { None } else { Some(Value::Object(map)) },
+                    if map.is_empty() {
+                        None
+                    } else {
+                        Some(Value::Object(map))
+                    },
                 )
             }
             Self::TokenInvalid { message } => {
@@ -219,20 +228,12 @@ impl SandboxError {
                 });
                 (None, None, details)
             }
-            Self::SessionNotFound { session_id } => {
-                (None, Some(session_id.clone()), None)
-            }
-            Self::SessionAlreadyExists { session_id } => {
-                (None, Some(session_id.clone()), None)
-            }
+            Self::SessionNotFound { session_id } => (None, Some(session_id.clone()), None),
+            Self::SessionAlreadyExists { session_id } => (None, Some(session_id.clone()), None),
             Self::ModeNotSupported { agent, mode } => {
                 let mut map = Map::new();
                 map.insert("mode".to_string(), Value::String(mode.clone()));
-                (
-                    Some(agent.clone()),
-                    None,
-                    Some(Value::Object(map)),
-                )
+                (Some(agent.clone()), None, Some(Value::Object(map)))
             }
             Self::StreamError { message } => {
                 let mut map = Map::new();

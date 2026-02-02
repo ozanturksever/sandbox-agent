@@ -2,46 +2,42 @@ use serde_json::Value;
 
 use crate::opencode as schema;
 use crate::{
-    ContentPart,
-    EventConversion,
-    ItemDeltaData,
-    ItemEventData,
-    ItemKind,
-    ItemRole,
-    ItemStatus,
-    PermissionEventData,
-    PermissionStatus,
-    QuestionEventData,
-    QuestionStatus,
-    SessionStartedData,
-    UniversalEventData,
-    UniversalEventType,
-    UniversalItem,
+    ContentPart, EventConversion, ItemDeltaData, ItemEventData, ItemKind, ItemRole, ItemStatus,
+    PermissionEventData, PermissionStatus, QuestionEventData, QuestionStatus, SessionStartedData,
+    UniversalEventData, UniversalEventType, UniversalItem,
 };
 
 pub fn event_to_universal(event: &schema::Event) -> Result<Vec<EventConversion>, String> {
     let raw = serde_json::to_value(event).ok();
     match event {
         schema::Event::MessageUpdated(updated) => {
-            let schema::EventMessageUpdated { properties, type_: _ } = updated;
+            let schema::EventMessageUpdated {
+                properties,
+                type_: _,
+            } = updated;
             let schema::EventMessageUpdatedProperties { info } = properties;
             let (mut item, completed, session_id) = message_to_item(info);
-            item.status = if completed { ItemStatus::Completed } else { ItemStatus::InProgress };
+            item.status = if completed {
+                ItemStatus::Completed
+            } else {
+                ItemStatus::InProgress
+            };
             let event_type = if completed {
                 UniversalEventType::ItemCompleted
             } else {
                 UniversalEventType::ItemStarted
             };
-            let conversion = EventConversion::new(
-                event_type,
-                UniversalEventData::Item(ItemEventData { item }),
-            )
-            .with_native_session(session_id)
-            .with_raw(raw);
+            let conversion =
+                EventConversion::new(event_type, UniversalEventData::Item(ItemEventData { item }))
+                    .with_native_session(session_id)
+                    .with_raw(raw);
             Ok(vec![conversion])
         }
         schema::Event::MessagePartUpdated(updated) => {
-            let schema::EventMessagePartUpdated { properties, type_: _ } = updated;
+            let schema::EventMessagePartUpdated {
+                properties,
+                type_: _,
+            } = updated;
             let schema::EventMessagePartUpdatedProperties { part, delta } = properties;
             let mut events = Vec::new();
             let (session_id, message_id) = part_session_message(part);
@@ -122,11 +118,16 @@ pub fn event_to_universal(event: &schema::Event) -> Result<Vec<EventConversion>,
                 schema::Part::Variant4(tool_part) => {
                     let tool_events = tool_part_to_events(&tool_part, &message_id);
                     for event in tool_events {
-                        events.push(event.with_native_session(session_id.clone()).with_raw(raw.clone()));
+                        events.push(
+                            event
+                                .with_native_session(session_id.clone())
+                                .with_raw(raw.clone()),
+                        );
                     }
                 }
                 schema::Part::Variant1 { .. } => {
-                    let detail = serde_json::to_string(part).unwrap_or_else(|_| "subtask".to_string());
+                    let detail =
+                        serde_json::to_string(part).unwrap_or_else(|_| "subtask".to_string());
                     let item = status_item("subtask", Some(detail));
                     events.push(
                         EventConversion::new(
@@ -160,7 +161,10 @@ pub fn event_to_universal(event: &schema::Event) -> Result<Vec<EventConversion>,
             Ok(events)
         }
         schema::Event::QuestionAsked(asked) => {
-            let schema::EventQuestionAsked { properties, type_: _ } = asked;
+            let schema::EventQuestionAsked {
+                properties,
+                type_: _,
+            } = asked;
             let question = question_from_opencode(properties);
             let conversion = EventConversion::new(
                 UniversalEventType::QuestionRequested,
@@ -171,7 +175,10 @@ pub fn event_to_universal(event: &schema::Event) -> Result<Vec<EventConversion>,
             Ok(vec![conversion])
         }
         schema::Event::PermissionAsked(asked) => {
-            let schema::EventPermissionAsked { properties, type_: _ } = asked;
+            let schema::EventPermissionAsked {
+                properties,
+                type_: _,
+            } = asked;
             let permission = permission_from_opencode(properties);
             let conversion = EventConversion::new(
                 UniversalEventType::PermissionRequested,
@@ -182,7 +189,10 @@ pub fn event_to_universal(event: &schema::Event) -> Result<Vec<EventConversion>,
             Ok(vec![conversion])
         }
         schema::Event::SessionCreated(created) => {
-            let schema::EventSessionCreated { properties, type_: _ } = created;
+            let schema::EventSessionCreated {
+                properties,
+                type_: _,
+            } = created;
             let metadata = serde_json::to_value(&properties.info).ok();
             let conversion = EventConversion::new(
                 UniversalEventType::SessionStarted,
@@ -193,8 +203,12 @@ pub fn event_to_universal(event: &schema::Event) -> Result<Vec<EventConversion>,
             Ok(vec![conversion])
         }
         schema::Event::SessionStatus(status) => {
-            let schema::EventSessionStatus { properties, type_: _ } = status;
-            let detail = serde_json::to_string(&properties.status).unwrap_or_else(|_| "status".to_string());
+            let schema::EventSessionStatus {
+                properties,
+                type_: _,
+            } = status;
+            let detail =
+                serde_json::to_string(&properties.status).unwrap_or_else(|_| "status".to_string());
             let item = status_item("session.status", Some(detail));
             let conversion = EventConversion::new(
                 UniversalEventType::ItemCompleted,
@@ -205,7 +219,10 @@ pub fn event_to_universal(event: &schema::Event) -> Result<Vec<EventConversion>,
             Ok(vec![conversion])
         }
         schema::Event::SessionIdle(idle) => {
-            let schema::EventSessionIdle { properties, type_: _ } = idle;
+            let schema::EventSessionIdle {
+                properties,
+                type_: _,
+            } = idle;
             let item = status_item("session.idle", None);
             let conversion = EventConversion::new(
                 UniversalEventType::ItemCompleted,
@@ -216,8 +233,12 @@ pub fn event_to_universal(event: &schema::Event) -> Result<Vec<EventConversion>,
             Ok(vec![conversion])
         }
         schema::Event::SessionError(error) => {
-            let schema::EventSessionError { properties, type_: _ } = error;
-            let detail = serde_json::to_string(&properties.error).unwrap_or_else(|_| "session error".to_string());
+            let schema::EventSessionError {
+                properties,
+                type_: _,
+            } = error;
+            let detail = serde_json::to_string(&properties.error)
+                .unwrap_or_else(|_| "session error".to_string());
             let item = status_item("session.error", Some(detail));
             let conversion = EventConversion::new(
                 UniversalEventType::ItemCompleted,
@@ -270,7 +291,11 @@ fn message_to_item(message: &schema::Message) -> (UniversalItem, bool, Option<St
                     kind: ItemKind::Message,
                     role: Some(ItemRole::Assistant),
                     content: Vec::new(),
-                    status: if completed { ItemStatus::Completed } else { ItemStatus::InProgress },
+                    status: if completed {
+                        ItemStatus::Completed
+                    } else {
+                        ItemStatus::InProgress
+                    },
                 },
                 completed,
                 Some(session_id.clone()),
@@ -281,9 +306,10 @@ fn message_to_item(message: &schema::Message) -> (UniversalItem, bool, Option<St
 
 fn part_session_message(part: &schema::Part) -> (Option<String>, String) {
     match part {
-        schema::Part::Variant0(text_part) => {
-            (Some(text_part.session_id.clone()), text_part.message_id.clone())
-        }
+        schema::Part::Variant0(text_part) => (
+            Some(text_part.session_id.clone()),
+            text_part.message_id.clone(),
+        ),
         schema::Part::Variant1 {
             session_id,
             message_id,

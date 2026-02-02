@@ -3,21 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::Value;
 
 use crate::{
-    ContentPart,
-    EventConversion,
-    ItemEventData,
-    ItemDeltaData,
-    ItemKind,
-    ItemRole,
-    ItemStatus,
-    PermissionEventData,
-    PermissionStatus,
-    QuestionEventData,
-    QuestionStatus,
-    SessionStartedData,
-    UniversalEventData,
-    UniversalEventType,
-    UniversalItem,
+    ContentPart, EventConversion, ItemDeltaData, ItemEventData, ItemKind, ItemRole, ItemStatus,
+    PermissionEventData, PermissionStatus, QuestionEventData, QuestionStatus, SessionStartedData,
+    UniversalEventData, UniversalEventType, UniversalItem,
 };
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(1);
@@ -56,8 +44,11 @@ fn system_event_to_universal(event: &Value) -> EventConversion {
     let data = SessionStartedData {
         metadata: Some(event.clone()),
     };
-    EventConversion::new(UniversalEventType::SessionStarted, UniversalEventData::SessionStarted(data))
-        .with_raw(Some(event.clone()))
+    EventConversion::new(
+        UniversalEventType::SessionStarted,
+        UniversalEventData::SessionStarted(data),
+    )
+    .with_raw(Some(event.clone()))
 }
 
 fn assistant_event_to_universal(event: &Value, session_id: &str) -> Vec<EventConversion> {
@@ -97,12 +88,15 @@ fn assistant_event_to_universal(event: &Value, session_id: &str) -> Vec<EventCon
                     );
                     let is_question_tool = matches!(
                         name,
-                        "AskUserQuestion" | "ask_user_question" | "askUserQuestion"
+                        "AskUserQuestion"
+                            | "ask_user_question"
+                            | "askUserQuestion"
                             | "ask-user-question"
                     ) || is_exit_plan_mode;
                     let has_question_payload = input.get("questions").is_some();
                     if is_question_tool || has_question_payload {
-                        if let Some(question) = question_from_claude_input(&input, call_id.clone()) {
+                        if let Some(question) = question_from_claude_input(&input, call_id.clone())
+                        {
                             conversions.push(
                                 EventConversion::new(
                                     UniversalEventType::QuestionRequested,
@@ -117,10 +111,7 @@ fn assistant_event_to_universal(event: &Value, session_id: &str) -> Vec<EventCon
                                     UniversalEventData::Question(QuestionEventData {
                                         question_id: call_id.clone(),
                                         prompt: "Approve plan execution?".to_string(),
-                                        options: vec![
-                                            "approve".to_string(),
-                                            "reject".to_string(),
-                                        ],
+                                        options: vec!["approve".to_string(), "reject".to_string()],
                                         response: None,
                                         status: QuestionStatus::Requested,
                                     }),
@@ -129,7 +120,8 @@ fn assistant_event_to_universal(event: &Value, session_id: &str) -> Vec<EventCon
                             );
                         }
                     }
-                    let arguments = serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string());
+                    let arguments =
+                        serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string());
                     let tool_item = UniversalItem {
                         item_id: String::new(),
                         native_item_id: Some(call_id.clone()),
@@ -369,13 +361,12 @@ fn control_request_to_universal(event: &Value) -> Result<Vec<EventConversion>, S
         .get("request")
         .and_then(Value::as_object)
         .ok_or_else(|| "missing request".to_string())?;
-    let subtype = request
-        .get("subtype")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let subtype = request.get("subtype").and_then(Value::as_str).unwrap_or("");
 
     if subtype != "can_use_tool" {
-        return Err(format!("unsupported Claude control_request subtype: {subtype}"));
+        return Err(format!(
+            "unsupported Claude control_request subtype: {subtype}"
+        ));
     }
 
     let tool_name = request
@@ -387,10 +378,7 @@ fn control_request_to_universal(event: &Value) -> Result<Vec<EventConversion>, S
         .get("permission_suggestions")
         .cloned()
         .unwrap_or(Value::Null);
-    let blocked_path = request
-        .get("blocked_path")
-        .cloned()
-        .unwrap_or(Value::Null);
+    let blocked_path = request.get("blocked_path").cloned().unwrap_or(Value::Null);
 
     let metadata = serde_json::json!({
         "toolName": tool_name,

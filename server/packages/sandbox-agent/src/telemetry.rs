@@ -90,7 +90,8 @@ pub fn spawn_telemetry_task() {
 
         attempt_send(&client).await;
         let start = Instant::now() + Duration::from_secs(TELEMETRY_INTERVAL_SECS);
-        let mut interval = tokio::time::interval_at(start, Duration::from_secs(TELEMETRY_INTERVAL_SECS));
+        let mut interval =
+            tokio::time::interval_at(start, Duration::from_secs(TELEMETRY_INTERVAL_SECS));
         loop {
             interval.tick().await;
             attempt_send(&client).await;
@@ -150,7 +151,12 @@ fn load_or_create_id() -> String {
         }
     }
 
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).write(true).truncate(true).open(&path) {
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    {
         let _ = file.write_all(id.as_bytes());
     }
     id
@@ -194,7 +200,12 @@ fn write_last_sent(timestamp: i64) {
             return;
         }
     }
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).write(true).truncate(true).open(&path) {
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    {
         let _ = file.write_all(timestamp.to_string().as_bytes());
     }
 }
@@ -266,7 +277,8 @@ fn detect_provider() -> ProviderInfo {
         };
     }
 
-    if env::var("MODAL_IS_REMOTE").as_deref() == Ok("1") || env::var("MODAL_CLOUD_PROVIDER").is_ok() {
+    if env::var("MODAL_IS_REMOTE").as_deref() == Ok("1") || env::var("MODAL_CLOUD_PROVIDER").is_ok()
+    {
         let metadata = metadata_or_none([
             ("cloudProvider", env::var("MODAL_CLOUD_PROVIDER").ok()),
             ("region", env::var("MODAL_REGION").ok()),
@@ -395,7 +407,9 @@ fn detect_docker() -> bool {
     false
 }
 
-fn filter_metadata(pairs: impl IntoIterator<Item = (&'static str, Option<String>)>) -> HashMap<String, String> {
+fn filter_metadata(
+    pairs: impl IntoIterator<Item = (&'static str, Option<String>)>,
+) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for (key, value) in pairs {
         if let Some(value) = value {
@@ -407,7 +421,9 @@ fn filter_metadata(pairs: impl IntoIterator<Item = (&'static str, Option<String>
     map
 }
 
-fn metadata_or_none(pairs: impl IntoIterator<Item = (&'static str, Option<String>)>) -> Option<HashMap<String, String>> {
+fn metadata_or_none(
+    pairs: impl IntoIterator<Item = (&'static str, Option<String>)>,
+) -> Option<HashMap<String, String>> {
     let map = filter_metadata(pairs);
     if map.is_empty() {
         None

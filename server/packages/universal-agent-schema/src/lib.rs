@@ -1,13 +1,16 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use schemars::JsonSchema;
 use utoipa::ToSchema;
 
 pub use sandbox_agent_extracted_agent_schemas::{amp, claude, codex, opencode};
 
 pub mod agents;
 
-pub use agents::{amp as convert_amp, claude as convert_claude, codex as convert_codex, opencode as convert_opencode};
+pub use agents::{
+    amp as convert_amp, claude as convert_claude, codex as convert_codex,
+    opencode as convert_opencode,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
 pub struct UniversalEvent {
@@ -221,14 +224,38 @@ pub enum ItemStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
-    Text { text: String },
-    Json { json: Value },
-    ToolCall { name: String, arguments: String, call_id: String },
-    ToolResult { call_id: String, output: String },
-    FileRef { path: String, action: FileAction, diff: Option<String> },
-    Reasoning { text: String, visibility: ReasoningVisibility },
-    Image { path: String, mime: Option<String> },
-    Status { label: String, detail: Option<String> },
+    Text {
+        text: String,
+    },
+    Json {
+        json: Value,
+    },
+    ToolCall {
+        name: String,
+        arguments: String,
+        call_id: String,
+    },
+    ToolResult {
+        call_id: String,
+        output: String,
+    },
+    FileRef {
+        path: String,
+        action: FileAction,
+        diff: Option<String>,
+    },
+    Reasoning {
+        text: String,
+        visibility: ReasoningVisibility,
+    },
+    Image {
+        path: String,
+        mime: Option<String>,
+    },
+    Status {
+        label: String,
+        detail: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]

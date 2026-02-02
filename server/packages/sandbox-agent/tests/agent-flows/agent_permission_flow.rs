@@ -1,11 +1,11 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use axum::http::Method;
 use common::*;
 use sandbox_agent_agent_management::testing::test_agents_from_env;
-use std::time::Duration;
-use axum::http::Method;
 use serde_json::json;
+use std::time::Duration;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_permission_flow() {
@@ -41,14 +41,20 @@ async fn agent_permission_flow() {
             Some(json!({ "reply": "once" })),
         )
         .await;
-        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "permission reply");
+        assert_eq!(
+            status,
+            axum::http::StatusCode::NO_CONTENT,
+            "permission reply"
+        );
 
-        let resolved = poll_events_until(&app.app, &session_id, Duration::from_secs(120), |events| {
-            events.iter().any(|event| {
-                event.get("type").and_then(serde_json::Value::as_str) == Some("permission.resolved")
+        let resolved =
+            poll_events_until(&app.app, &session_id, Duration::from_secs(120), |events| {
+                events.iter().any(|event| {
+                    event.get("type").and_then(serde_json::Value::as_str)
+                        == Some("permission.resolved")
+                })
             })
-        })
-        .await;
+            .await;
 
         assert!(
             resolved.iter().any(|event| {

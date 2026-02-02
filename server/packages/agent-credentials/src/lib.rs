@@ -43,7 +43,9 @@ impl CredentialExtractionOptions {
     }
 }
 
-pub fn extract_claude_credentials(options: &CredentialExtractionOptions) -> Option<ProviderCredentials> {
+pub fn extract_claude_credentials(
+    options: &CredentialExtractionOptions,
+) -> Option<ProviderCredentials> {
     let home_dir = options.home_dir.clone().unwrap_or_else(default_home_dir);
     let include_oauth = options.include_oauth;
 
@@ -88,8 +90,7 @@ pub fn extract_claude_credentials(options: &CredentialExtractionOptions) -> Opti
             };
             let access = read_string_field(&data, &["claudeAiOauth", "accessToken"]);
             if let Some(token) = access {
-                if let Some(expires_at) =
-                    read_string_field(&data, &["claudeAiOauth", "expiresAt"])
+                if let Some(expires_at) = read_string_field(&data, &["claudeAiOauth", "expiresAt"])
                 {
                     if is_expired_rfc3339(&expires_at) {
                         continue;
@@ -108,7 +109,9 @@ pub fn extract_claude_credentials(options: &CredentialExtractionOptions) -> Opti
     None
 }
 
-pub fn extract_codex_credentials(options: &CredentialExtractionOptions) -> Option<ProviderCredentials> {
+pub fn extract_codex_credentials(
+    options: &CredentialExtractionOptions,
+) -> Option<ProviderCredentials> {
     let home_dir = options.home_dir.clone().unwrap_or_else(default_home_dir);
     let include_oauth = options.include_oauth;
     let path = home_dir.join(".codex").join("auth.json");
@@ -165,18 +168,18 @@ pub fn extract_opencode_credentials(options: &CredentialExtractionOptions) -> Ex
             None => continue,
         };
 
-        let auth_type = config
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let auth_type = config.get("type").and_then(Value::as_str).unwrap_or("");
 
         let credentials = if auth_type == "api" {
-            config.get("key").and_then(Value::as_str).map(|key| ProviderCredentials {
-                api_key: key.to_string(),
-                source: "opencode".to_string(),
-                auth_type: AuthType::ApiKey,
-                provider: provider_name.to_string(),
-            })
+            config
+                .get("key")
+                .and_then(Value::as_str)
+                .map(|key| ProviderCredentials {
+                    api_key: key.to_string(),
+                    source: "opencode".to_string(),
+                    auth_type: AuthType::ApiKey,
+                    provider: provider_name.to_string(),
+                })
         } else if auth_type == "oauth" && include_oauth {
             let expires = config.get("expires").and_then(Value::as_i64);
             if let Some(expires) = expires {
@@ -214,7 +217,9 @@ pub fn extract_opencode_credentials(options: &CredentialExtractionOptions) -> Ex
             } else if provider_name == "openai" {
                 result.openai = Some(credentials.clone());
             } else {
-                result.other.insert(provider_name.to_string(), credentials.clone());
+                result
+                    .other
+                    .insert(provider_name.to_string(), credentials.clone());
             }
         }
     }
@@ -222,7 +227,9 @@ pub fn extract_opencode_credentials(options: &CredentialExtractionOptions) -> Ex
     result
 }
 
-pub fn extract_amp_credentials(options: &CredentialExtractionOptions) -> Option<ProviderCredentials> {
+pub fn extract_amp_credentials(
+    options: &CredentialExtractionOptions,
+) -> Option<ProviderCredentials> {
     let home_dir = options.home_dir.clone().unwrap_or_else(default_home_dir);
     let path = home_dir.join(".amp").join("config.json");
     let data = read_json_file(&path)?;

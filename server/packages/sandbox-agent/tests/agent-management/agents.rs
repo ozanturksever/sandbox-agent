@@ -36,11 +36,19 @@ fn test_agents_install_version_spawn() -> Result<(), Box<dyn std::error::Error>>
     let env = build_env();
     assert!(!env.is_empty(), "expected credentials to be available");
 
-    let agents = [AgentId::Claude, AgentId::Codex, AgentId::Opencode, AgentId::Amp];
+    let agents = [
+        AgentId::Claude,
+        AgentId::Codex,
+        AgentId::Opencode,
+        AgentId::Amp,
+    ];
     for agent in agents {
         let install = manager.install(agent, InstallOptions::default())?;
         assert!(install.path.exists(), "expected install for {agent}");
-        assert!(manager.is_installed(agent), "expected is_installed for {agent}");
+        assert!(
+            manager.is_installed(agent),
+            "expected is_installed for {agent}"
+        );
         manager.install(
             agent,
             InstallOptions {
@@ -70,9 +78,15 @@ fn test_agents_install_version_spawn() -> Result<(), Box<dyn std::error::Error>>
             );
             let combined = format!("{}{}", result.stdout, result.stderr);
             let output = result.result.clone().unwrap_or(combined);
-            assert!(output.contains("OK"), "expected OK for {agent}, got: {output}");
+            assert!(
+                output.contains("OK"),
+                "expected OK for {agent}, got: {output}"
+            );
 
-            if agent == AgentId::Claude || agent == AgentId::Opencode || (agent == AgentId::Amp && amp_configured()) {
+            if agent == AgentId::Claude
+                || agent == AgentId::Opencode
+                || (agent == AgentId::Amp && amp_configured())
+            {
                 let mut resume = SpawnOptions::new(prompt_ok("OK2"));
                 resume.env = env.clone();
                 resume.session_id = result.session_id.clone();
@@ -84,12 +98,17 @@ fn test_agents_install_version_spawn() -> Result<(), Box<dyn std::error::Error>>
                 );
                 let combined = format!("{}{}", resumed.stdout, resumed.stderr);
                 let output = resumed.result.clone().unwrap_or(combined);
-                assert!(output.contains("OK2"), "expected OK2 for {agent}, got: {output}");
+                assert!(
+                    output.contains("OK2"),
+                    "expected OK2 for {agent}, got: {output}"
+                );
             } else if agent == AgentId::Codex {
                 let mut resume = SpawnOptions::new(prompt_ok("OK2"));
                 resume.env = env.clone();
                 resume.session_id = result.session_id.clone();
-                let err = manager.spawn(agent, resume).expect_err("expected resume error for codex");
+                let err = manager
+                    .spawn(agent, resume)
+                    .expect_err("expected resume error for codex");
                 assert!(matches!(err, AgentError::ResumeUnsupported { .. }));
             }
 
@@ -105,7 +124,10 @@ fn test_agents_install_version_spawn() -> Result<(), Box<dyn std::error::Error>>
                 );
                 let combined = format!("{}{}", planned.stdout, planned.stderr);
                 let output = planned.result.clone().unwrap_or(combined);
-                assert!(output.contains("OK3"), "expected OK3 for {agent}, got: {output}");
+                assert!(
+                    output.contains("OK3"),
+                    "expected OK3 for {agent}, got: {output}"
+                );
             }
         }
     }

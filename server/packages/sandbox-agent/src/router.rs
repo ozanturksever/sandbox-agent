@@ -25,8 +25,7 @@ use sandbox_agent_universal_agent_schema::{
     ItemDeltaData, ItemEventData, ItemKind, ItemRole, ItemStatus, PermissionEventData,
     PermissionStatus, QuestionEventData, QuestionStatus, ReasoningVisibility, SessionEndReason,
     SessionEndedData, SessionStartedData, StderrOutput, TerminatedBy, UniversalEvent,
-    UniversalEventData,
-    UniversalEventType, UniversalItem,
+    UniversalEventData, UniversalEventType, UniversalItem,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -37,6 +36,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tower_http::trace::TraceLayer;
 use utoipa::{Modify, OpenApi, ToSchema};
 
+use crate::agent_server_logs::AgentServerLogs;
 use crate::ui;
 use sandbox_agent_agent_management::agents::{
     AgentError as ManagerError, AgentId, AgentManager, InstallOptions, SpawnOptions, StreamingSpawn,
@@ -44,7 +44,6 @@ use sandbox_agent_agent_management::agents::{
 use sandbox_agent_agent_management::credentials::{
     extract_all_credentials, CredentialExtractionOptions, ExtractedCredentials,
 };
-use crate::agent_server_logs::AgentServerLogs;
 
 const MOCK_EVENT_DELAY_MS: u64 = 200;
 static USER_MESSAGE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -99,7 +98,10 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
         .route("/sessions", get(list_sessions))
         .route("/sessions/:session_id", post(create_session))
         .route("/sessions/:session_id/messages", post(post_message))
-        .route("/sessions/:session_id/messages/stream", post(post_message_stream))
+        .route(
+            "/sessions/:session_id/messages/stream",
+            post(post_message_stream),
+        )
         .route("/sessions/:session_id/terminate", post(terminate_session))
         .route("/sessions/:session_id/events", get(get_events))
         .route("/sessions/:session_id/events/sse", get(get_events_sse))
@@ -1142,8 +1144,8 @@ impl AgentServerManager {
     ) -> Result<(String, Arc<std::sync::Mutex<Option<std::process::Child>>>), SandboxError> {
         let manager = self.agent_manager.clone();
         let log_dir = self.log_base_dir.clone();
-        let (base_url, child) =
-            tokio::task::spawn_blocking(move || -> Result<(String, std::process::Child), SandboxError> {
+        let (base_url, child) = tokio::task::spawn_blocking(
+            move || -> Result<(String, std::process::Child), SandboxError> {
                 let path = manager
                     .resolve_binary(agent)
                     .map_err(|err| map_spawn_error(agent, err))?;
@@ -1160,16 +1162,14 @@ impl AgentServerManager {
                     message: err.to_string(),
                 })?;
                 Ok((format!("http://127.0.0.1:{port}"), child))
-            })
-            .await
-            .map_err(|err| SandboxError::StreamError {
-                message: err.to_string(),
-            })??;
+            },
+        )
+        .await
+        .map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })??;
 
-        Ok((
-            base_url,
-            Arc::new(std::sync::Mutex::new(Some(child))),
-        ))
+        Ok((base_url, Arc::new(std::sync::Mutex::new(Some(child)))))
     }
 
     async fn spawn_stdio_server(
@@ -1188,59 +1188,66 @@ impl AgentServerManager {
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<String>();
         let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
 
-        let child = tokio::task::spawn_blocking(move || -> Result<std::process::Child, SandboxError> {
-            let path = manager
-                .resolve_binary(agent)
-                .map_err(|err| map_spawn_error(agent, err))?;
-            let mut command = std::process::Command::new(path);
-            let stderr = AgentServerLogs::new(log_dir, agent.as_str()).open()?;
-            command
-                .arg("app-server")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(stderr);
+        let child =
+            tokio::task::spawn_blocking(move || -> Result<std::process::Child, SandboxError> {
+                let path = manager
+                    .resolve_binary(agent)
+                    .map_err(|err| map_spawn_error(agent, err))?;
+                let mut command = std::process::Command::new(path);
+                let stderr = AgentServerLogs::new(log_dir, agent.as_str()).open()?;
+                command
+                    .arg("app-server")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(stderr);
 
-            let mut child = command.spawn().map_err(|err| SandboxError::StreamError {
+                let mut child = command.spawn().map_err(|err| SandboxError::StreamError {
+                    message: err.to_string(),
+                })?;
+
+                let stdin = child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| SandboxError::StreamError {
+                        message: "codex stdin unavailable".to_string(),
+                    })?;
+                let stdout = child
+                    .stdout
+                    .take()
+                    .ok_or_else(|| SandboxError::StreamError {
+                        message: "codex stdout unavailable".to_string(),
+                    })?;
+
+                let stdin_rx_mut = std::sync::Mutex::new(stdin_rx);
+                std::thread::spawn(move || {
+                    let mut stdin = stdin;
+                    let mut rx = stdin_rx_mut.lock().unwrap();
+                    while let Some(line) = rx.blocking_recv() {
+                        if writeln!(stdin, "{line}").is_err() {
+                            break;
+                        }
+                        if stdin.flush().is_err() {
+                            break;
+                        }
+                    }
+                });
+
+                std::thread::spawn(move || {
+                    let reader = BufReader::new(stdout);
+                    for line in reader.lines() {
+                        let Ok(line) = line else { break };
+                        if stdout_tx.send(line).is_err() {
+                            break;
+                        }
+                    }
+                });
+
+                Ok(child)
+            })
+            .await
+            .map_err(|err| SandboxError::StreamError {
                 message: err.to_string(),
-            })?;
-
-            let stdin = child.stdin.take().ok_or_else(|| SandboxError::StreamError {
-                message: "codex stdin unavailable".to_string(),
-            })?;
-            let stdout = child.stdout.take().ok_or_else(|| SandboxError::StreamError {
-                message: "codex stdout unavailable".to_string(),
-            })?;
-
-            let stdin_rx_mut = std::sync::Mutex::new(stdin_rx);
-            std::thread::spawn(move || {
-                let mut stdin = stdin;
-                let mut rx = stdin_rx_mut.lock().unwrap();
-                while let Some(line) = rx.blocking_recv() {
-                    if writeln!(stdin, "{line}").is_err() {
-                        break;
-                    }
-                    if stdin.flush().is_err() {
-                        break;
-                    }
-                }
-            });
-
-            std::thread::spawn(move || {
-                let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                    let Ok(line) = line else { break };
-                    if stdout_tx.send(line).is_err() {
-                        break;
-                    }
-                }
-            });
-
-            Ok(child)
-        })
-        .await
-        .map_err(|err| SandboxError::StreamError {
-            message: err.to_string(),
-        })??;
+            })??;
 
         let server = Arc::new(CodexServer::new(stdin_tx));
 
@@ -1348,7 +1355,10 @@ impl AgentServerManager {
         }
     }
 
-    async fn ensure_server_for_restart(self: Arc<Self>, agent: AgentId) -> Result<(), SandboxError> {
+    async fn ensure_server_for_restart(
+        self: Arc<Self>,
+        agent: AgentId,
+    ) -> Result<(), SandboxError> {
         sleep(Duration::from_millis(500)).await;
         match agent {
             AgentId::Opencode => {
@@ -1446,26 +1456,24 @@ impl SessionManager {
         }
     }
 
-    fn session_ref<'a>(
-        sessions: &'a [SessionState],
-        session_id: &str,
-    ) -> Option<&'a SessionState> {
-        sessions.iter().find(|session| session.session_id == session_id)
+    fn session_ref<'a>(sessions: &'a [SessionState], session_id: &str) -> Option<&'a SessionState> {
+        sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
     }
 
     fn session_mut<'a>(
         sessions: &'a mut [SessionState],
         session_id: &str,
     ) -> Option<&'a mut SessionState> {
-        sessions.iter_mut().find(|session| session.session_id == session_id)
+        sessions
+            .iter_mut()
+            .find(|session| session.session_id == session_id)
     }
 
     /// Read agent stderr for error diagnostics
     fn read_agent_stderr(&self, agent: AgentId) -> Option<StderrOutput> {
-        let logs = AgentServerLogs::new(
-            self.server_manager.log_base_dir.clone(),
-            agent.as_str(),
-        );
+        let logs = AgentServerLogs::new(self.server_manager.log_base_dir.clone(), agent.as_str());
         logs.read_stderr()
     }
 
@@ -1477,7 +1485,10 @@ impl SessionManager {
         let agent_id = parse_agent_id(&request.agent)?;
         {
             let sessions = self.sessions.lock().await;
-            if sessions.iter().any(|session| session.session_id == session_id) {
+            if sessions
+                .iter()
+                .any(|session| session.session_id == session_id)
+            {
                 return Err(SandboxError::SessionAlreadyExists { session_id });
             }
         }
@@ -1676,10 +1687,7 @@ impl SessionManager {
         Ok(())
     }
 
-    async fn emit_synthetic_assistant_start(
-        &self,
-        session_id: &str,
-    ) -> Result<(), SandboxError> {
+    async fn emit_synthetic_assistant_start(&self, session_id: &str) -> Result<(), SandboxError> {
         let conversion = {
             let mut sessions = self.sessions.lock().await;
             let session = Self::session_mut(&mut sessions, session_id).ok_or_else(|| {
@@ -1689,7 +1697,9 @@ impl SessionManager {
             })?;
             session.enqueue_pending_assistant_start()
         };
-        let _ = self.record_conversions(session_id, vec![conversion]).await?;
+        let _ = self
+            .record_conversions(session_id, vec![conversion])
+            .await?;
         Ok(())
     }
 
@@ -1906,12 +1916,16 @@ impl SessionManager {
             let sender = claude_sender.ok_or_else(|| SandboxError::InvalidRequest {
                 message: "Claude session is not active".to_string(),
             })?;
-            let session_id = native_session_id.clone().unwrap_or_else(|| session_id.to_string());
+            let session_id = native_session_id
+                .clone()
+                .unwrap_or_else(|| session_id.to_string());
             let response_text = response.clone().unwrap_or_default();
             let line = claude_tool_result_line(&session_id, question_id, &response_text, false);
-            sender.send(line).map_err(|_| SandboxError::InvalidRequest {
-                message: "Claude session is not active".to_string(),
-            })?;
+            sender
+                .send(line)
+                .map_err(|_| SandboxError::InvalidRequest {
+                    message: "Claude session is not active".to_string(),
+                })?;
         } else {
             // TODO: Forward question replies to subprocess agents.
         }
@@ -1977,16 +1991,20 @@ impl SessionManager {
             let sender = claude_sender.ok_or_else(|| SandboxError::InvalidRequest {
                 message: "Claude session is not active".to_string(),
             })?;
-            let session_id = native_session_id.clone().unwrap_or_else(|| session_id.to_string());
+            let session_id = native_session_id
+                .clone()
+                .unwrap_or_else(|| session_id.to_string());
             let line = claude_tool_result_line(
                 &session_id,
                 question_id,
                 "User rejected the question.",
                 true,
             );
-            sender.send(line).map_err(|_| SandboxError::InvalidRequest {
-                message: "Claude session is not active".to_string(),
-            })?;
+            sender
+                .send(line)
+                .map_err(|_| SandboxError::InvalidRequest {
+                    message: "Claude session is not active".to_string(),
+                })?;
         } else {
             // TODO: Forward question rejections to subprocess agents.
         }
@@ -2140,9 +2158,11 @@ impl SessionManager {
             };
 
             let line = claude_control_response_line(permission_id, behavior, response_value);
-            sender.send(line).map_err(|_| SandboxError::InvalidRequest {
-                message: "Claude session is not active".to_string(),
-            })?;
+            sender
+                .send(line)
+                .map_err(|_| SandboxError::InvalidRequest {
+                    message: "Claude session is not active".to_string(),
+                })?;
         } else {
             // TODO: Forward permission replies to subprocess agents.
         }
@@ -2812,7 +2832,8 @@ impl SessionManager {
                 Err(_) => continue,
             };
 
-            let message: codex_schema::JsonrpcMessage = match serde_json::from_value(value.clone()) {
+            let message: codex_schema::JsonrpcMessage = match serde_json::from_value(value.clone())
+            {
                 Ok(m) => m,
                 Err(_) => continue,
             };
@@ -2829,12 +2850,17 @@ impl SessionManager {
                     if let Ok(notification) =
                         serde_json::from_value::<codex_schema::ServerNotification>(value.clone())
                     {
-                        if let Some(thread_id) = codex_thread_id_from_server_notification(&notification) {
+                        if let Some(thread_id) =
+                            codex_thread_id_from_server_notification(&notification)
+                        {
                             if let Some(session_id) = server.session_for_thread(&thread_id) {
-                                let conversions = match convert_codex::notification_to_universal(&notification) {
-                                    Ok(c) => c,
-                                    Err(err) => vec![agent_unparsed("codex", &err, value.clone())],
-                                };
+                                let conversions =
+                                    match convert_codex::notification_to_universal(&notification) {
+                                        Ok(c) => c,
+                                        Err(err) => {
+                                            vec![agent_unparsed("codex", &err, value.clone())]
+                                        }
+                                    };
                                 let _ = self.record_conversions(&session_id, conversions).await;
                             }
                         }
@@ -2852,7 +2878,8 @@ impl SessionManager {
                                         for conversion in &mut conversions {
                                             conversion.raw = Some(value.clone());
                                         }
-                                        let _ = self.record_conversions(&session_id, conversions).await;
+                                        let _ =
+                                            self.record_conversions(&session_id, conversions).await;
                                     }
                                     Err(err) => {
                                         let _ = self
@@ -2983,12 +3010,13 @@ impl SessionManager {
     ) -> Result<(), SandboxError> {
         let server = self.ensure_codex_server().await?;
 
-        let thread_id = session
-            .native_session_id
-            .as_ref()
-            .ok_or_else(|| SandboxError::InvalidRequest {
-                message: "missing Codex thread id".to_string(),
-            })?;
+        let thread_id =
+            session
+                .native_session_id
+                .as_ref()
+                .ok_or_else(|| SandboxError::InvalidRequest {
+                    message: "missing Codex thread id".to_string(),
+                })?;
 
         let id = server.next_request_id();
         let prompt_text = codex_prompt_for_mode(prompt, Some(&session.agent_mode));
@@ -3431,14 +3459,22 @@ pub struct EventsQuery {
     pub offset: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "include_raw")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "include_raw"
+    )]
     pub include_raw: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStreamQuery {
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "include_raw")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "include_raw"
+    )]
     pub include_raw: Option<bool>,
 }
 
@@ -3554,7 +3590,10 @@ async fn get_root() -> &'static str {
 }
 
 async fn not_found() -> (StatusCode, String) {
-    (StatusCode::NOT_FOUND, format!("404 Not Found\n\n{SERVER_INFO}"))
+    (
+        StatusCode::NOT_FOUND,
+        format!("404 Not Found\n\n{SERVER_INFO}"),
+    )
 }
 
 #[utoipa::path(
@@ -3581,48 +3620,47 @@ async fn list_agents(
     let manager = state.agent_manager.clone();
     let server_statuses = state.session_manager.server_manager.status_snapshot().await;
 
-    let agents = tokio::task::spawn_blocking(move || {
-        all_agents()
-            .into_iter()
-            .map(|agent_id| {
-                let installed = manager.is_installed(agent_id);
-                let version = manager.version(agent_id).ok().flatten();
-                let path = manager.resolve_binary(agent_id).ok();
-                let capabilities = agent_capabilities_for(agent_id);
+    let agents =
+        tokio::task::spawn_blocking(move || {
+            all_agents()
+                .into_iter()
+                .map(|agent_id| {
+                    let installed = manager.is_installed(agent_id);
+                    let version = manager.version(agent_id).ok().flatten();
+                    let path = manager.resolve_binary(agent_id).ok();
+                    let capabilities = agent_capabilities_for(agent_id);
 
-                // Add server_status for agents with shared processes
-                let server_status = if capabilities.shared_process {
-                    Some(
-                        server_statuses
-                            .get(&agent_id)
-                            .cloned()
-                            .unwrap_or(ServerStatusInfo {
-                                status: ServerStatus::Stopped,
-                                base_url: None,
-                                uptime_ms: None,
-                                restart_count: 0,
-                                last_error: None,
-                            }),
-                    )
-                } else {
-                    None
-                };
+                    // Add server_status for agents with shared processes
+                    let server_status =
+                        if capabilities.shared_process {
+                            Some(server_statuses.get(&agent_id).cloned().unwrap_or(
+                                ServerStatusInfo {
+                                    status: ServerStatus::Stopped,
+                                    base_url: None,
+                                    uptime_ms: None,
+                                    restart_count: 0,
+                                    last_error: None,
+                                },
+                            ))
+                        } else {
+                            None
+                        };
 
-                AgentInfo {
-                    id: agent_id.as_str().to_string(),
-                    installed,
-                    version,
-                    path: path.map(|path| path.to_string_lossy().to_string()),
-                    capabilities,
-                    server_status,
-                }
-            })
-            .collect::<Vec<_>>()
-    })
-    .await
-    .map_err(|err| SandboxError::StreamError {
-        message: err.to_string(),
-    })?;
+                    AgentInfo {
+                        id: agent_id.as_str().to_string(),
+                        installed,
+                        version,
+                        path: path.map(|path| path.to_string_lossy().to_string()),
+                        capabilities,
+                        server_status,
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
 
     Ok(Json(AgentListResponse { agents }))
 }
@@ -3908,7 +3946,10 @@ fn all_agents() -> [AgentId; 5] {
 /// Returns true if the agent supports resuming a session after its process exits.
 /// These agents can use --resume/--continue to continue a conversation.
 fn agent_supports_resume(agent: AgentId) -> bool {
-    matches!(agent, AgentId::Claude | AgentId::Amp | AgentId::Opencode | AgentId::Codex)
+    matches!(
+        agent,
+        AgentId::Claude | AgentId::Amp | AgentId::Opencode | AgentId::Codex
+    )
 }
 
 fn agent_supports_item_started(agent: AgentId) -> bool {
@@ -4076,16 +4117,18 @@ fn agent_modes_for(agent: AgentId) -> Vec<AgentModeInfo> {
             name: "Build".to_string(),
             description: "Default build mode".to_string(),
         }],
-        AgentId::Mock => vec![AgentModeInfo {
-            id: "build".to_string(),
-            name: "Build".to_string(),
-            description: "Mock agent for UI testing".to_string(),
-        },
-        AgentModeInfo {
-            id: "plan".to_string(),
-            name: "Plan".to_string(),
-            description: "Plan-only mock mode".to_string(),
-        }],
+        AgentId::Mock => vec![
+            AgentModeInfo {
+                id: "build".to_string(),
+                name: "Build".to_string(),
+                description: "Mock agent for UI testing".to_string(),
+            },
+            AgentModeInfo {
+                id: "plan".to_string(),
+                name: "Plan".to_string(),
+                description: "Plan-only mock mode".to_string(),
+            },
+        ],
     }
 }
 
@@ -4317,16 +4360,9 @@ fn claude_tool_result_line(
     .to_string()
 }
 
-fn claude_control_response_line(
-    request_id: &str,
-    behavior: &str,
-    response: Value,
-) -> String {
+fn claude_control_response_line(request_id: &str, behavior: &str, response: Value) -> String {
     let mut response_obj = serde_json::Map::new();
-    response_obj.insert(
-        "behavior".to_string(),
-        Value::String(behavior.to_string()),
-    );
+    response_obj.insert("behavior".to_string(), Value::String(behavior.to_string()));
     if let Some(message) = response.get("message") {
         response_obj.insert("message".to_string(), message.clone());
     }
@@ -5032,7 +5068,8 @@ pub mod test_utils {
     impl TestHarness {
         pub async fn new() -> Self {
             let temp_dir = TempDir::new().expect("temp dir");
-            let agent_manager = Arc::new(AgentManager::new(temp_dir.path()).expect("agent manager"));
+            let agent_manager =
+                Arc::new(AgentManager::new(temp_dir.path()).expect("agent manager"));
             let session_manager = Arc::new(SessionManager::new(agent_manager));
             session_manager
                 .server_manager
@@ -5068,11 +5105,7 @@ pub mod test_utils {
                 .await;
         }
 
-        pub async fn has_session_mapping(
-            &self,
-            agent: AgentId,
-            session_id: &str,
-        ) -> bool {
+        pub async fn has_session_mapping(&self, agent: AgentId, session_id: &str) -> bool {
             let sessions = self.session_manager.server_manager.sessions.lock().await;
             sessions
                 .get(&agent)
@@ -5111,8 +5144,8 @@ pub mod test_utils {
                 variant: None,
                 agent_version: None,
             };
-            let mut session = SessionState::new(session_id.to_string(), agent, &request)
-                .expect("session");
+            let mut session =
+                SessionState::new(session_id.to_string(), agent, &request).expect("session");
             session.native_session_id = native_session_id.map(|id| id.to_string());
             self.session_manager.sessions.lock().await.push(session);
         }
@@ -5126,38 +5159,48 @@ pub mod test_utils {
             let (stdin_tx, _stdin_rx) = mpsc::unbounded_channel::<String>();
             let server = Arc::new(CodexServer::new(stdin_tx));
             let child = Arc::new(std::sync::Mutex::new(child));
-            self.session_manager.server_manager.servers.lock().await.insert(
-                agent,
-                ManagedServer {
-                    kind: ManagedServerKind::Stdio { server },
-                    child: child.clone(),
-                    status: ServerStatus::Running,
-                    start_time: Some(Instant::now()),
-                    restart_count: 0,
-                    last_error: None,
-                    shutdown_requested: false,
-                    instance_id,
-                },
-            );
+            self.session_manager
+                .server_manager
+                .servers
+                .lock()
+                .await
+                .insert(
+                    agent,
+                    ManagedServer {
+                        kind: ManagedServerKind::Stdio { server },
+                        child: child.clone(),
+                        status: ServerStatus::Running,
+                        start_time: Some(Instant::now()),
+                        restart_count: 0,
+                        last_error: None,
+                        shutdown_requested: false,
+                        instance_id,
+                    },
+                );
             child
         }
 
         pub async fn insert_http_server(&self, agent: AgentId, instance_id: u64) {
-            self.session_manager.server_manager.servers.lock().await.insert(
-                agent,
-                ManagedServer {
-                    kind: ManagedServerKind::Http {
-                        base_url: "http://127.0.0.1:1".to_string(),
+            self.session_manager
+                .server_manager
+                .servers
+                .lock()
+                .await
+                .insert(
+                    agent,
+                    ManagedServer {
+                        kind: ManagedServerKind::Http {
+                            base_url: "http://127.0.0.1:1".to_string(),
+                        },
+                        child: Arc::new(std::sync::Mutex::new(None)),
+                        status: ServerStatus::Running,
+                        start_time: Some(Instant::now()),
+                        restart_count: 0,
+                        last_error: None,
+                        shutdown_requested: false,
+                        instance_id,
                     },
-                    child: Arc::new(std::sync::Mutex::new(None)),
-                    status: ServerStatus::Running,
-                    start_time: Some(Instant::now()),
-                    restart_count: 0,
-                    last_error: None,
-                    shutdown_requested: false,
-                    instance_id,
-                },
-            );
+                );
         }
 
         pub async fn handle_process_exit(
@@ -5246,7 +5289,12 @@ pub mod test_utils {
 fn default_log_dir() -> PathBuf {
     dirs::data_dir()
         .map(|dir| dir.join("sandbox-agent").join("logs").join("servers"))
-        .unwrap_or_else(|| PathBuf::from(".").join(".sandbox-agent").join("logs").join("servers"))
+        .unwrap_or_else(|| {
+            PathBuf::from(".")
+                .join(".sandbox-agent")
+                .join("logs")
+                .join("servers")
+        })
 }
 
 fn find_available_port() -> Result<u16, SandboxError> {
@@ -5296,7 +5344,6 @@ impl SseAccumulator {
         events
     }
 }
-
 
 fn parse_opencode_modes(value: &Value) -> Vec<AgentModeInfo> {
     let mut modes = Vec::new();

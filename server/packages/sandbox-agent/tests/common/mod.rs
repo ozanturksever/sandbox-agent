@@ -9,12 +9,7 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::util::ServiceExt;
 
-use sandbox_agent::router::{
-    build_router,
-    AgentCapabilities,
-    AgentListResponse,
-    AuthConfig,
-};
+use sandbox_agent::router::{build_router, AgentCapabilities, AgentListResponse, AuthConfig};
 use sandbox_agent_agent_credentials::ExtractedCredentials;
 use sandbox_agent_agent_management::agents::{AgentId, AgentManager};
 
@@ -32,8 +27,7 @@ pub struct TestApp {
 impl TestApp {
     pub fn new() -> Self {
         let install_dir = tempfile::tempdir().expect("create temp install dir");
-        let manager = AgentManager::new(install_dir.path())
-            .expect("create agent manager");
+        let manager = AgentManager::new(install_dir.path()).expect("create agent manager");
         let state = sandbox_agent::router::AppState::new(AuthConfig::disabled(), manager);
         let app = build_router(state);
         Self {
@@ -59,7 +53,12 @@ impl Drop for EnvGuard {
 }
 
 pub fn apply_credentials(creds: &ExtractedCredentials) -> EnvGuard {
-    let keys = ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"];
+    let keys = [
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_API_KEY",
+        "OPENAI_API_KEY",
+        "CODEX_API_KEY",
+    ];
     let mut saved = HashMap::new();
     for key in keys {
         saved.insert(key.to_string(), std::env::var(key).ok());
@@ -100,13 +99,11 @@ pub async fn send_json(
         .method(method)
         .uri(path)
         .header("content-type", "application/json")
-        .body(Body::from(body.map(|value| value.to_string()).unwrap_or_default()))
+        .body(Body::from(
+            body.map(|value| value.to_string()).unwrap_or_default(),
+        ))
         .expect("request");
-    let response = app
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("response");
+    let response = app.clone().oneshot(request).await.expect("response");
     let status = response.status();
     let bytes = response
         .into_body()
@@ -140,15 +137,15 @@ pub async fn install_agent(app: &Router, agent: AgentId) {
         Some(json!({})),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "install agent {}", agent.as_str());
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "install agent {}",
+        agent.as_str()
+    );
 }
 
-pub async fn create_session(
-    app: &Router,
-    agent: AgentId,
-    session_id: &str,
-    permission_mode: &str,
-) {
+pub async fn create_session(app: &Router, agent: AgentId, session_id: &str, permission_mode: &str) {
     let status = send_status(
         app,
         Method::POST,

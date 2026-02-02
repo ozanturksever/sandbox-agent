@@ -55,9 +55,7 @@ async fn permission_flow_snapshots() {
             let status = send_status(
                 &app.app,
                 Method::POST,
-                &format!(
-                    "/v1/sessions/{permission_session}/permissions/{permission_id}/reply"
-                ),
+                &format!("/v1/sessions/{permission_session}/permissions/{permission_id}/reply"),
                 Some(json!({ "reply": "once" })),
             )
             .await;
@@ -67,9 +65,7 @@ async fn permission_flow_snapshots() {
             let (status, payload) = send_json(
                 &app.app,
                 Method::POST,
-                &format!(
-                    "/v1/sessions/{permission_session}/permissions/missing-permission/reply"
-                ),
+                &format!("/v1/sessions/{permission_session}/permissions/missing-permission/reply"),
                 Some(json!({ "reply": "once" })),
             )
             .await;

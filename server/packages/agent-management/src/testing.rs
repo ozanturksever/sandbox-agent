@@ -285,10 +285,7 @@ fn handle_health_response(
     })
 }
 
-fn run_blocking_check<F>(
-    provider: &str,
-    check: F,
-) -> Result<(), TestAgentConfigError>
+fn run_blocking_check<F>(provider: &str, check: F) -> Result<(), TestAgentConfigError>
 where
     F: FnOnce() -> Result<(), TestAgentConfigError> + Send + 'static,
 {
@@ -301,7 +298,12 @@ where
 }
 
 fn detect_system_agents() -> Vec<AgentId> {
-    let candidates = [AgentId::Claude, AgentId::Codex, AgentId::Opencode, AgentId::Amp];
+    let candidates = [
+        AgentId::Claude,
+        AgentId::Codex,
+        AgentId::Opencode,
+        AgentId::Amp,
+    ];
     let install_dir = default_install_dir();
     candidates
         .into_iter()

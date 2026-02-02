@@ -17,10 +17,7 @@ fn main() {
         let schema_path = schema_dir.join(file);
 
         // Tell cargo to rerun if schema changes
-        emit_stdout(&format!(
-            "cargo:rerun-if-changed={}",
-            schema_path.display()
-        ));
+        emit_stdout(&format!("cargo:rerun-if-changed={}", schema_path.display()));
 
         if !schema_path.exists() {
             emit_stdout(&format!(
@@ -48,9 +45,10 @@ fn main() {
         let contents = type_space.to_stream();
 
         // Format the generated code
-        let formatted = prettyplease::unparse(&syn::parse2(contents.clone()).unwrap_or_else(|e| {
-            panic!("Failed to parse generated code for {}: {}", name, e)
-        }));
+        let formatted = prettyplease::unparse(
+            &syn::parse2(contents.clone())
+                .unwrap_or_else(|e| panic!("Failed to parse generated code for {}: {}", name, e)),
+        );
 
         let out_path = Path::new(&out_dir).join(format!("{}.rs", name));
         fs::write(&out_path, formatted)

@@ -1,13 +1,13 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use axum::http::Method;
 use common::*;
-use sandbox_agent_agent_management::testing::test_agents_from_env;
 use sandbox_agent_agent_management::agents::AgentId;
+use sandbox_agent_agent_management::testing::test_agents_from_env;
 use serde_json::Value;
 use std::fs;
 use std::time::{Duration, Instant};
-use axum::http::Method;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_file_edit_flow() {
@@ -77,9 +77,7 @@ Do not change any other files. Reply only with DONE after editing.",
                         let _ = send_status(
                             &app.app,
                             Method::POST,
-                            &format!(
-                                "/v1/sessions/{session_id}/permissions/{permission_id}/reply"
-                            ),
+                            &format!("/v1/sessions/{session_id}/permissions/{permission_id}/reply"),
                             Some(serde_json::json!({ "reply": "once" })),
                         )
                         .await;

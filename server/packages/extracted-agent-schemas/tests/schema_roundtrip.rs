@@ -17,16 +17,14 @@ fn test_claude_bash_input() {
 
 #[test]
 fn test_codex_server_notification() {
-    let notification = codex::ServerNotification::ItemCompleted(
-        codex::ItemCompletedNotification {
-            item: codex::ThreadItem::AgentMessage {
-                id: "msg-123".to_string(),
-                text: "Hello from Codex".to_string(),
-            },
-            thread_id: "thread-123".to_string(),
-            turn_id: "turn-456".to_string(),
+    let notification = codex::ServerNotification::ItemCompleted(codex::ItemCompletedNotification {
+        item: codex::ThreadItem::AgentMessage {
+            id: "msg-123".to_string(),
+            text: "Hello from Codex".to_string(),
         },
-    );
+        thread_id: "thread-123".to_string(),
+        turn_id: "turn-456".to_string(),
+    });
 
     let json = serde_json::to_string(&notification).unwrap();
     assert!(json.contains("item/completed"));
