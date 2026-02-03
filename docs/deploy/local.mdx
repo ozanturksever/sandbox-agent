@@ -15,11 +15,20 @@ curl -fsSL https://releases.rivet.dev/sandbox-agent/latest/install.sh | sh
 sandbox-agent server --no-token --host 127.0.0.1 --port 2468
 ```
 
-Or with npm:
+Or with npm or Bun:
 
-```bash
-npx sandbox-agent server --no-token --host 127.0.0.1 --port 2468
-```
+<Tabs>
+  <Tab title="npx">
+    ```bash
+    npx sandbox-agent server --no-token --host 127.0.0.1 --port 2468
+    ```
+  </Tab>
+  <Tab title="bunx">
+    ```bash
+    bunx sandbox-agent server --no-token --host 127.0.0.1 --port 2468
+    ```
+  </Tab>
+</Tabs>
 
 ## With the TypeScript SDK
 

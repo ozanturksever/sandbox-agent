@@ -1,5 +1,9 @@
 import type { ChildProcess } from "node:child_process";
 import type { AddressInfo } from "node:net";
+import {
+  formatNonExecutableBinaryMessage,
+  isPermissionError,
+} from "@sandbox-agent/cli-shared";
 
 export type SandboxAgentSpawnLogMode = "inherit" | "pipe" | "silent";
 
@@ -27,6 +31,9 @@ const PLATFORM_PACKAGES: Record<string, string> = {
   "linux-x64": "@sandbox-agent/cli-linux-x64",
   "win32-x64": "@sandbox-agent/cli-win32-x64",
 };
+
+const TRUST_PACKAGES =
+  "@sandbox-agent/cli-linux-x64 @sandbox-agent/cli-darwin-arm64 @sandbox-agent/cli-darwin-x64 @sandbox-agent/cli-win32-x64";
 
 export function isNodeRuntime(): boolean {
   return typeof process !== "undefined" && !!process.versions?.node;
@@ -64,6 +71,31 @@ export async function spawnSandboxAgent(
 
   if (!binaryPath) {
     throw new Error("sandbox-agent binary not found. Install @sandbox-agent/cli or set SANDBOX_AGENT_BIN.");
+  }
+
+  if (process.platform !== "win32") {
+    try {
+      fs.accessSync(binaryPath, fs.constants.X_OK);
+    } catch (error) {
+      if (isPermissionError(error)) {
+        throw new Error(
+          formatNonExecutableBinaryMessage({
+            binPath: binaryPath,
+            trustPackages: TRUST_PACKAGES,
+            bunInstallBlocks: [
+              {
+                label: "Project install",
+                commands: [
+                  `bun pm trust ${TRUST_PACKAGES}`,
+                  "bun add sandbox-agent",
+                ],
+              },
+            ],
+          }),
+        );
+      }
+      throw error;
+    }
   }
 
   const stdio = logMode === "inherit" ? "inherit" : logMode === "silent" ? "ignore" : "pipe";

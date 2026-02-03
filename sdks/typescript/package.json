@@ -16,6 +16,9 @@
       "import": "./dist/index.js"
     }
   },
+  "dependencies": {
+    "@sandbox-agent/cli-shared": "workspace:*"
+  },
   "files": [
     "dist"
   ],
