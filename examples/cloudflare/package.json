@@ -3,17 +3,25 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev": "vite build --watch & wrangler dev",
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cloudflare/sandbox": "latest"
+    "@cloudflare/sandbox": "latest",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "sandbox-agent": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
     "@types/node": "latest",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.5.0",
     "typescript": "latest",
+    "vite": "^6.2.0",
     "vitest": "^3.0.0",
     "wrangler": "latest"
   }

@@ -49,9 +49,9 @@
 					"deploy/index",
 					"deploy/local",
 					"deploy/e2b",
+					"deploy/daytona",
 					"deploy/vercel",
 					"deploy/cloudflare",
-					"deploy/daytona",
 					"deploy/docker"
 				]
 			},

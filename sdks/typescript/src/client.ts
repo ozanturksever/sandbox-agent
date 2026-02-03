@@ -66,7 +66,7 @@ export class SandboxAgent {
   private constructor(options: SandboxAgentConnectOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.token = options.token;
-    this.fetcher = options.fetch ?? globalThis.fetch;
+    this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.defaultHeaders = options.headers;
 
     if (!this.fetcher) {
