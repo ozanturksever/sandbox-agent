@@ -116,12 +116,21 @@ export async function publishCrates(opts: ReleaseOpts) {
 
 		try {
 			await $({
-				stdio: "inherit",
+				stdout: "pipe",
+				stderr: "pipe",
 				cwd: cratePath,
 			})`cargo publish --allow-dirty --no-verify`;
 			console.log(`✅ Published ${crateName}@${opts.version}`);
-		} catch (err) {
+		} catch (err: any) {
+			// Check if error is because crate already exists (from a previous partial run)
+			if (err.stderr?.includes("already exists")) {
+				console.log(
+					`Version ${opts.version} of ${crateName} already exists on crates.io. Skipping...`,
+				);
+				continue;
+			}
 			console.error(`❌ Failed to publish ${crateName}`);
+			console.error(err.stderr || err.message);
 			throw err;
 		}
 
@@ -131,6 +140,43 @@ export async function publishCrates(opts: ReleaseOpts) {
 	}
 
 	console.log("✅ All crates published");
+}
+
+export async function publishNpmCliShared(opts: ReleaseOpts) {
+	const cliSharedPath = join(opts.root, "sdks/cli-shared");
+	const packageJsonPath = join(cliSharedPath, "package.json");
+	const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
+	const name = packageJson.name;
+
+	// Check if version already exists
+	const versionExists = await npmVersionExists(name, opts.version);
+	if (versionExists) {
+		console.log(
+			`Version ${opts.version} of ${name} already exists. Skipping...`,
+		);
+		return;
+	}
+
+	// Build cli-shared
+	console.log(`==> Building @sandbox-agent/cli-shared`);
+	await $({
+		stdio: "inherit",
+		cwd: opts.root,
+	})`pnpm --filter @sandbox-agent/cli-shared build`;
+
+	// Publish
+	console.log(`==> Publishing to NPM: ${name}@${opts.version}`);
+
+	// Add --tag flag for release candidates
+	const isReleaseCandidate = opts.version.includes("-rc.");
+	const tag = isReleaseCandidate ? "rc" : "latest";
+
+	await $({
+		stdio: "inherit",
+		cwd: cliSharedPath,
+	})`pnpm publish --access public --tag ${tag} --no-git-checks`;
+
+	console.log(`✅ Published ${name}@${opts.version}`);
 }
 
 export async function publishNpmSdk(opts: ReleaseOpts) {
@@ -148,7 +194,7 @@ export async function publishNpmSdk(opts: ReleaseOpts) {
 		return;
 	}
 
-	// Build the SDK
+	// Build the SDK (cli-shared should already be built by publishNpmCliShared)
 	console.log(`==> Building TypeScript SDK`);
 	await $({
 		stdio: "inherit",

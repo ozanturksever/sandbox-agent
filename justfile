@@ -46,3 +46,7 @@ check:
 [group('dev')]
 fmt:
 	cargo fmt --all
+
+[group('dev')]
+dev-docs:
+	cd docs && pnpm dlx mintlify dev

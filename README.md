@@ -63,8 +63,12 @@ Choose the installation method that works best for your use case.
 
 Install skill with:
 
-```
+```bash
 npx skills add rivet-dev/skills -s sandbox-agent
+```
+
+```bash
+bunx skills add rivet-dev/skills -s sandbox-agent
 ```
 
 ### TypeScript SDK
@@ -75,6 +79,12 @@ Import the SDK directly into your Node or browser application. Full type safety 
 
 ```bash
 npm install sandbox-agent
+```
+
+```bash
+bun add sandbox-agent
+# Optional: allow Bun to run postinstall scripts for native binaries (required for SandboxAgent.start()).
+bun pm trust @sandbox-agent/cli-linux-x64 @sandbox-agent/cli-darwin-arm64 @sandbox-agent/cli-darwin-x64 @sandbox-agent/cli-win32-x64
 ```
 
 **Setup**
@@ -154,6 +164,12 @@ Install the CLI wrapper (optional but convenient):
 npm install -g @sandbox-agent/cli
 ```
 
+```bash
+# Allow Bun to run postinstall scripts for native binaries.
+bun add -g @sandbox-agent/cli
+bun pm -g trust @sandbox-agent/cli-linux-x64 @sandbox-agent/cli-darwin-arm64 @sandbox-agent/cli-darwin-x64 @sandbox-agent/cli-win32-x64
+```
+
 Create a session and send a message:
 
 ```bash
@@ -166,6 +182,10 @@ You can also use npx like:
 
 ```bash
 npx sandbox-agent --help
+```
+
+```bash
+bunx sandbox-agent --help
 ```
 
 [CLI documentation](https://sandboxagent.dev/docs/cli)
