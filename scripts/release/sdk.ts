@@ -116,12 +116,21 @@ export async function publishCrates(opts: ReleaseOpts) {
 
 		try {
 			await $({
-				stdio: "inherit",
+				stdout: "pipe",
+				stderr: "pipe",
 				cwd: cratePath,
 			})`cargo publish --allow-dirty --no-verify`;
 			console.log(`✅ Published ${crateName}@${opts.version}`);
-		} catch (err) {
+		} catch (err: any) {
+			// Check if error is because crate already exists (from a previous partial run)
+			if (err.stderr?.includes("already exists")) {
+				console.log(
+					`Version ${opts.version} of ${crateName} already exists on crates.io. Skipping...`,
+				);
+				continue;
+			}
 			console.error(`❌ Failed to publish ${crateName}`);
+			console.error(err.stderr || err.message);
 			throw err;
 		}
 
