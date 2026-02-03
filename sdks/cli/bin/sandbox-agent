@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 const { execFileSync } = require("child_process");
 const {
+  assertExecutable,
   formatNonExecutableBinaryMessage,
-  isPermissionError,
 } = require("@sandbox-agent/cli-shared");
 const fs = require("fs");
 const path = require("path");
@@ -10,29 +10,27 @@ const path = require("path");
 const TRUST_PACKAGES =
   "@sandbox-agent/cli-linux-x64 @sandbox-agent/cli-darwin-arm64 @sandbox-agent/cli-darwin-x64 @sandbox-agent/cli-win32-x64";
 
-function printExecutableHint(binPath) {
-  console.error(
-    formatNonExecutableBinaryMessage({
-      binPath,
-      trustPackages: TRUST_PACKAGES,
-      bunInstallBlocks: [
-        {
-          label: "Project install",
-          commands: [
-            `bun pm trust ${TRUST_PACKAGES}`,
-            "bun add @sandbox-agent/cli",
-          ],
-        },
-        {
-          label: "Global install",
-          commands: [
-            `bun pm -g trust ${TRUST_PACKAGES}`,
-            "bun add -g @sandbox-agent/cli",
-          ],
-        },
-      ],
-    }),
-  );
+function formatHint(binPath) {
+  return formatNonExecutableBinaryMessage({
+    binPath,
+    trustPackages: TRUST_PACKAGES,
+    bunInstallBlocks: [
+      {
+        label: "Project install",
+        commands: [
+          `bun pm trust ${TRUST_PACKAGES}`,
+          "bun add @sandbox-agent/cli",
+        ],
+      },
+      {
+        label: "Global install",
+        commands: [
+          `bun pm -g trust ${TRUST_PACKAGES}`,
+          "bun add -g @sandbox-agent/cli",
+        ],
+      },
+    ],
+  });
 }
 
 const PLATFORMS = {
@@ -53,29 +51,13 @@ try {
   const pkgPath = require.resolve(`${pkg}/package.json`);
   const bin = process.platform === "win32" ? "sandbox-agent.exe" : "sandbox-agent";
   const binPath = path.join(path.dirname(pkgPath), "bin", bin);
-  if (process.platform !== "win32") {
-    try {
-      fs.accessSync(binPath, fs.constants.X_OK);
-    } catch (error) {
-      try {
-        fs.chmodSync(binPath, 0o755);
-      } catch (chmodError) {
-        if (isPermissionError(chmodError)) {
-          printExecutableHint(binPath);
-        }
-        console.error(`Failed to make ${binPath} executable.`);
-        throw chmodError;
-      }
-    }
+
+  if (!assertExecutable(binPath, fs)) {
+    console.error(formatHint(binPath));
+    process.exit(1);
   }
-  try {
-    execFileSync(binPath, process.argv.slice(2), { stdio: "inherit" });
-  } catch (execError) {
-    if (isPermissionError(execError)) {
-      printExecutableHint(binPath);
-    }
-    throw execError;
-  }
+
+  execFileSync(binPath, process.argv.slice(2), { stdio: "inherit" });
 } catch (e) {
   if (e.status !== undefined) process.exit(e.status);
   throw e;

@@ -1,8 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import {
+  assertExecutable,
   formatNonExecutableBinaryMessage,
-  isPermissionError,
 } from "@sandbox-agent/cli-shared";
 
 export type SandboxAgentSpawnLogMode = "inherit" | "pipe" | "silent";
@@ -73,29 +73,29 @@ export async function spawnSandboxAgent(
     throw new Error("sandbox-agent binary not found. Install @sandbox-agent/cli or set SANDBOX_AGENT_BIN.");
   }
 
-  if (process.platform !== "win32") {
-    try {
-      fs.accessSync(binaryPath, fs.constants.X_OK);
-    } catch (error) {
-      if (isPermissionError(error)) {
-        throw new Error(
-          formatNonExecutableBinaryMessage({
-            binPath: binaryPath,
-            trustPackages: TRUST_PACKAGES,
-            bunInstallBlocks: [
-              {
-                label: "Project install",
-                commands: [
-                  `bun pm trust ${TRUST_PACKAGES}`,
-                  "bun add sandbox-agent",
-                ],
-              },
+  if (!assertExecutable(binaryPath, fs)) {
+    throw new Error(
+      formatNonExecutableBinaryMessage({
+        binPath: binaryPath,
+        trustPackages: TRUST_PACKAGES,
+        bunInstallBlocks: [
+          {
+            label: "Project install",
+            commands: [
+              `bun pm trust ${TRUST_PACKAGES}`,
+              "bun add sandbox-agent",
             ],
-          }),
-        );
-      }
-      throw error;
-    }
+          },
+          {
+            label: "Global install",
+            commands: [
+              `bun pm -g trust ${TRUST_PACKAGES}`,
+              "bun add -g sandbox-agent",
+            ],
+          },
+        ],
+      }),
+    );
   }
 
   const stdio = logMode === "inherit" ? "inherit" : logMode === "silent" ? "ignore" : "pipe";
