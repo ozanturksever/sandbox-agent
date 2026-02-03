@@ -45,7 +45,7 @@ function UniversalAPIDiagram() {
             <feComposite in="SourceGraphic" in2="blur" operator="over" />
           </filter>
           <filter id="invert-white" colorInterpolationFilters="sRGB">
-            <feColorMatrix type="matrix" values="-1 0 0 0 1  0 -1 0 0 1  0 0 -1 0 1  0 0 0 1 0" />
+            <feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1 0" />
           </filter>
         </defs>
 
