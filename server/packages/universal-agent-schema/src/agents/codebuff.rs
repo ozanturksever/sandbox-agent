@@ -4,9 +4,8 @@ use serde_json::Value;
 
 use crate::{
     ContentPart, ErrorData, EventConversion, ItemDeltaData, ItemEventData, ItemKind, ItemRole,
-    ItemStatus, QuestionEventData, QuestionStatus, ReasoningVisibility, SessionEndReason,
-    SessionEndedData, SessionStartedData, TerminatedBy, UniversalEventData, UniversalEventType,
-    UniversalItem,
+    ItemStatus, QuestionEventData, QuestionStatus, SessionEndReason, SessionEndedData,
+    SessionStartedData, TerminatedBy, UniversalEventData, UniversalEventType, UniversalItem,
 };
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(1);
@@ -145,7 +144,7 @@ fn tool_call_to_universal(event: &Value) -> Vec<EventConversion> {
         .unwrap_or("unknown")
         .to_string();
     let input = event.get("input").cloned().unwrap_or(Value::Null);
-    let agent_id = event.get("agentId").and_then(Value::as_str);
+    let _agent_id = event.get("agentId").and_then(Value::as_str);
     let parent_agent_id = event
         .get("parentAgentId")
         .and_then(Value::as_str)
