@@ -36,6 +36,7 @@ pub enum TestAgentConfigError {
 const AGENTS_ENV: &str = "SANDBOX_TEST_AGENTS";
 const ANTHROPIC_ENV: &str = "SANDBOX_TEST_ANTHROPIC_API_KEY";
 const OPENAI_ENV: &str = "SANDBOX_TEST_OPENAI_API_KEY";
+const CODEBUFF_ENV: &str = "SANDBOX_TEST_CODEBUFF_API_KEY";
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";
 const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -44,6 +45,7 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 struct HealthCheckCache {
     anthropic_ok: bool,
     openai_ok: bool,
+    codebuff_ok: bool,
 }
 
 pub fn test_agents_from_env() -> Result<Vec<TestAgentConfig>, TestAgentConfigError> {
@@ -63,6 +65,7 @@ pub fn test_agents_from_env() -> Result<Vec<TestAgentConfig>, TestAgentConfigErr
                     AgentId::Codex,
                     AgentId::Opencode,
                     AgentId::Amp,
+                    AgentId::Codebuff,
                 ]);
                 continue;
             }
@@ -97,6 +100,14 @@ pub fn test_agents_from_env() -> Result<Vec<TestAgentConfig>, TestAgentConfigErr
             provider: "openai".to_string(),
         })
         .or_else(|| extracted.openai.clone());
+    let codebuff_cred = read_env_key(CODEBUFF_ENV)
+        .map(|key| ProviderCredentials {
+            api_key: key,
+            source: "sandbox-test-env".to_string(),
+            auth_type: AuthType::ApiKey,
+            provider: "codebuff".to_string(),
+        })
+        .or_else(|| extracted.other.get("codebuff").cloned());
     let mut health_cache = HealthCheckCache::default();
 
     let mut configs = Vec::new();
@@ -137,6 +148,16 @@ pub fn test_agents_from_env() -> Result<Vec<TestAgentConfig>, TestAgentConfigErr
                 }
                 credentials_with(anthropic_cred.clone(), openai_cred.clone())
             }
+            AgentId::Codebuff => {
+                let codebuff_cred = codebuff_cred.clone().ok_or_else(|| {
+                    TestAgentConfigError::MissingCredentials {
+                        agent,
+                        missing: CODEBUFF_ENV.to_string(),
+                    }
+                })?;
+                ensure_codebuff_ok(&mut health_cache, &codebuff_cred)?;
+                credentials_with_codebuff(codebuff_cred)
+            }
             AgentId::Mock => credentials_with(None, None),
         };
         configs.push(TestAgentConfig { agent, credentials });
@@ -166,6 +187,24 @@ fn ensure_openai_ok(
     }
     health_check_openai(credentials)?;
     cache.openai_ok = true;
+    Ok(())
+}
+
+fn ensure_codebuff_ok(
+    cache: &mut HealthCheckCache,
+    credentials: &ProviderCredentials,
+) -> Result<(), TestAgentConfigError> {
+    if cache.codebuff_ok {
+        return Ok(());
+    }
+    // Codebuff doesn't have a simple health check endpoint, so we just verify the key is non-empty
+    if credentials.api_key.trim().is_empty() {
+        return Err(TestAgentConfigError::InvalidCredentials {
+            provider: "codebuff".to_string(),
+            status: 0,
+        });
+    }
+    cache.codebuff_ok = true;
     Ok(())
 }
 
@@ -303,6 +342,7 @@ fn detect_system_agents() -> Vec<AgentId> {
         AgentId::Codex,
         AgentId::Opencode,
         AgentId::Amp,
+        AgentId::Codebuff,
     ];
     let install_dir = default_install_dir();
     candidates
@@ -352,5 +392,11 @@ fn credentials_with(
     let mut credentials = ExtractedCredentials::default();
     credentials.anthropic = anthropic_cred;
     credentials.openai = openai_cred;
+    credentials
+}
+
+fn credentials_with_codebuff(codebuff_cred: ProviderCredentials) -> ExtractedCredentials {
+    let mut credentials = ExtractedCredentials::default();
+    credentials.other.insert("codebuff".to_string(), codebuff_cred);
     credentials
 }

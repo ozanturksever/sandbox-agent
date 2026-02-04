@@ -21,6 +21,7 @@ pub enum AgentId {
     Codex,
     Opencode,
     Amp,
+    Codebuff,
     Mock,
 }
 
@@ -31,6 +32,7 @@ impl AgentId {
             AgentId::Codex => "codex",
             AgentId::Opencode => "opencode",
             AgentId::Amp => "amp",
+            AgentId::Codebuff => "codebuff",
             AgentId::Mock => "mock",
         }
     }
@@ -41,6 +43,7 @@ impl AgentId {
             AgentId::Codex => "codex",
             AgentId::Opencode => "opencode",
             AgentId::Amp => "amp",
+            AgentId::Codebuff => "codebuff",
             AgentId::Mock => "mock",
         }
     }
@@ -51,6 +54,7 @@ impl AgentId {
             "codex" => Some(AgentId::Codex),
             "opencode" => Some(AgentId::Opencode),
             "amp" => Some(AgentId::Amp),
+            "codebuff" => Some(AgentId::Codebuff),
             "mock" => Some(AgentId::Mock),
             _ => None,
         }
@@ -151,6 +155,9 @@ impl AgentManager {
                 install_opencode(&install_path, self.platform, options.version.as_deref())?
             }
             AgentId::Amp => install_amp(&install_path, self.platform, options.version.as_deref())?,
+            AgentId::Codebuff => {
+                install_codebuff(&install_path, self.platform, options.version.as_deref())?
+            }
             AgentId::Mock => {
                 if !install_path.exists() {
                     fs::write(&install_path, b"mock")?;
@@ -272,6 +279,20 @@ impl AgentManager {
             }
             AgentId::Amp => {
                 let output = spawn_amp(&path, &working_dir, &options)?;
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let events = parse_jsonl_from_outputs(&stdout, &stderr);
+                return Ok(SpawnResult {
+                    status: output.status,
+                    stdout,
+                    stderr,
+                    session_id: extract_session_id(agent, &events),
+                    result: extract_result_text(agent, &events),
+                    events,
+                });
+            }
+            AgentId::Codebuff => {
+                let output = spawn_codebuff(&path, &working_dir, &options)?;
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 let events = parse_jsonl_from_outputs(&stdout, &stderr);
@@ -619,6 +640,9 @@ impl AgentManager {
             AgentId::Amp => {
                 return Ok(build_amp_command(&path, &working_dir, options));
             }
+            AgentId::Codebuff => {
+                return Ok(build_codebuff_command(&path, &working_dir, options));
+            }
             AgentId::Mock => {
                 return Err(AgentError::UnsupportedAgent {
                     agent: agent.as_str().to_string(),
@@ -881,7 +905,7 @@ fn extract_nested_string(value: &Value, path: &[&str]) -> Option<String> {
 fn extract_session_id(agent: AgentId, events: &[Value]) -> Option<String> {
     for event in events {
         match agent {
-            AgentId::Claude | AgentId::Amp => {
+            AgentId::Claude | AgentId::Amp | AgentId::Codebuff => {
                 if let Some(id) = event.get("session_id").and_then(Value::as_str) {
                     return Some(id.to_string());
                 }
@@ -948,7 +972,7 @@ fn extract_session_id(agent: AgentId, events: &[Value]) -> Option<String> {
 
 fn extract_result_text(agent: AgentId, events: &[Value]) -> Option<String> {
     match agent {
-        AgentId::Claude | AgentId::Amp => {
+        AgentId::Claude | AgentId::Amp | AgentId::Codebuff => {
             for event in events {
                 if let Some(result) = event.get("result").and_then(Value::as_str) {
                     return Some(result.to_string());
@@ -1356,6 +1380,112 @@ fn install_opencode(
             Ok(())
         }
     }
+}
+
+fn spawn_codebuff(
+    path: &Path,
+    working_dir: &Path,
+    options: &SpawnOptions,
+) -> Result<std::process::Output, AgentError> {
+    let mut command = Command::new(path);
+    command.current_dir(working_dir);
+    command.arg("--stream-json");
+
+    // Map agent_mode to Codebuff mode flags
+    match options.agent_mode.as_deref() {
+        Some("FREE") | Some("free") => {
+            command.arg("--free");
+        }
+        Some("MAX") | Some("max") => {
+            command.arg("--max");
+        }
+        Some("PLAN") | Some("plan") => {
+            command.arg("--plan");
+        }
+        _ => {}
+    }
+
+    if let Some(session_id) = options.session_id.as_deref() {
+        command.arg("--continue").arg(session_id);
+    }
+
+    command.arg(&options.prompt);
+
+    for (key, value) in &options.env {
+        command.env(key, value);
+    }
+
+    command.output().map_err(AgentError::Io)
+}
+
+fn build_codebuff_command(path: &Path, working_dir: &Path, options: &SpawnOptions) -> Command {
+    let mut command = Command::new(path);
+    command.current_dir(working_dir);
+    command.arg("--stream-json");
+
+    // Map agent_mode to Codebuff mode flags
+    match options.agent_mode.as_deref() {
+        Some("FREE") | Some("free") => {
+            command.arg("--free");
+        }
+        Some("MAX") | Some("max") => {
+            command.arg("--max");
+        }
+        Some("PLAN") | Some("plan") => {
+            command.arg("--plan");
+        }
+        _ => {}
+    }
+
+    if let Some(session_id) = options.session_id.as_deref() {
+        command.arg("--continue").arg(session_id);
+    }
+
+    command.arg(&options.prompt);
+
+    for (key, value) in &options.env {
+        command.env(key, value);
+    }
+
+    command
+}
+
+fn install_codebuff(
+    path: &Path,
+    _platform: Platform,
+    _version: Option<&str>,
+) -> Result<(), AgentError> {
+    // Codebuff is typically installed via npm/bun globally
+    // For now, we check if it's available in PATH and symlink or copy it
+    if let Some(existing) = find_in_path("codebuff") {
+        if path != existing {
+            // Create a symlink or copy if not the same path
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::symlink;
+                if path.exists() {
+                    fs::remove_file(path)?;
+                }
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                symlink(&existing, path)?;
+            }
+            #[cfg(not(unix))]
+            {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&existing, path)?;
+            }
+        }
+        return Ok(());
+    }
+
+    // If codebuff is not in PATH, return an error with installation instructions
+    Err(AgentError::ExtractFailed(
+        "codebuff not found in PATH. Install with: npm install -g codebuff".to_string(),
+    ))
 }
 
 fn install_zip_binary(path: &Path, url: &Url, binary_name: &str) -> Result<(), AgentError> {

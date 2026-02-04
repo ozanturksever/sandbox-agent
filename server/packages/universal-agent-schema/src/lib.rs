@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-pub use sandbox_agent_extracted_agent_schemas::{amp, claude, codex, opencode};
+pub use sandbox_agent_extracted_agent_schemas::{amp, claude, codebuff, codex, opencode};
 
 pub mod agents;
 
 pub use agents::{
-    amp as convert_amp, claude as convert_claude, codex as convert_codex,
-    opencode as convert_opencode,
+    amp as convert_amp, claude as convert_claude, codebuff as convert_codebuff,
+    codex as convert_codex, opencode as convert_opencode,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]

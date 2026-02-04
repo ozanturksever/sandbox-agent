@@ -227,6 +227,48 @@ pub fn extract_opencode_credentials(options: &CredentialExtractionOptions) -> Ex
     result
 }
 
+pub fn extract_codebuff_credentials(
+    options: &CredentialExtractionOptions,
+) -> Option<ProviderCredentials> {
+    let home_dir = options.home_dir.clone().unwrap_or_else(default_home_dir);
+
+    // Check config file
+    let config_paths = [
+        home_dir.join(".codebuff").join("config.json"),
+        home_dir.join(".codebuff").join("auth.json"),
+    ];
+
+    for path in config_paths {
+        let data = match read_json_file(&path) {
+            Some(value) => value,
+            None => continue,
+        };
+
+        let key_paths: Vec<Vec<&str>> = vec![
+            vec!["apiKey"],
+            vec!["api_key"],
+            vec!["token"],
+            vec!["accessToken"],
+            vec!["access_token"],
+        ];
+
+        for key_path in &key_paths {
+            if let Some(key) = read_string_field(&data, key_path) {
+                if !key.is_empty() {
+                    return Some(ProviderCredentials {
+                        api_key: key,
+                        source: "codebuff".to_string(),
+                        auth_type: AuthType::ApiKey,
+                        provider: "codebuff".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    None
+}
+
 pub fn extract_amp_credentials(
     options: &CredentialExtractionOptions,
 ) -> Option<ProviderCredentials> {
@@ -267,6 +309,21 @@ pub fn extract_amp_credentials(
 
 pub fn extract_all_credentials(options: &CredentialExtractionOptions) -> ExtractedCredentials {
     let mut result = ExtractedCredentials::default();
+
+    // Check for Codebuff API key
+    if let Ok(value) = std::env::var("CODEBUFF_API_KEY") {
+        result.other.insert(
+            "codebuff".to_string(),
+            ProviderCredentials {
+                api_key: value,
+                source: "environment".to_string(),
+                auth_type: AuthType::ApiKey,
+                provider: "codebuff".to_string(),
+            },
+        );
+    } else if let Some(cred) = extract_codebuff_credentials(options) {
+        result.other.insert("codebuff".to_string(), cred);
+    }
 
     if let Ok(value) = std::env::var("ANTHROPIC_API_KEY") {
         result.anthropic = Some(ProviderCredentials {

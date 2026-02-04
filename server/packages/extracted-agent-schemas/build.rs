@@ -11,6 +11,7 @@ fn main() {
         ("claude", "claude.json"),
         ("codex", "codex.json"),
         ("amp", "amp.json"),
+        ("codebuff", "codebuff.json"),
     ];
 
     for (name, file) in schemas {

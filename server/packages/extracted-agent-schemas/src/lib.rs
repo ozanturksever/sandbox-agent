@@ -25,3 +25,8 @@ pub mod amp {
     //! AMP Code SDK types.
     include!(concat!(env!("OUT_DIR"), "/amp.rs"));
 }
+
+pub mod codebuff {
+    //! Codebuff CLI types extracted from PrintModeEvent schema.
+    include!(concat!(env!("OUT_DIR"), "/codebuff.rs"));
+}

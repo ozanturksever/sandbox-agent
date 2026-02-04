@@ -1,4 +1,5 @@
 mod agent_basic_reply;
+mod agent_codebuff_flow;
 mod agent_file_edit_flow;
 mod agent_multi_turn;
 mod agent_permission_flow;

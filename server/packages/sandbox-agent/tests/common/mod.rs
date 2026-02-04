@@ -58,6 +58,7 @@ pub fn apply_credentials(creds: &ExtractedCredentials) -> EnvGuard {
         "CLAUDE_API_KEY",
         "OPENAI_API_KEY",
         "CODEX_API_KEY",
+        "CODEBUFF_API_KEY",
     ];
     let mut saved = HashMap::new();
     for key in keys {
@@ -83,6 +84,15 @@ pub fn apply_credentials(creds: &ExtractedCredentials) -> EnvGuard {
         None => {
             std::env::remove_var("OPENAI_API_KEY");
             std::env::remove_var("CODEX_API_KEY");
+        }
+    }
+
+    match creds.other.get("codebuff") {
+        Some(cred) => {
+            std::env::set_var("CODEBUFF_API_KEY", &cred.api_key);
+        }
+        None => {
+            std::env::remove_var("CODEBUFF_API_KEY");
         }
     }
 
@@ -183,6 +193,7 @@ pub async fn create_session_with_mode(
 pub fn test_permission_mode(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Opencode => "default",
+        AgentId::Codebuff => "default", // Codebuff doesn't have bypass mode
         _ => "bypass",
     }
 }

@@ -20,7 +20,8 @@ use futures::{stream, StreamExt};
 use reqwest::Client;
 use sandbox_agent_error::{AgentError, ErrorType, ProblemDetails, SandboxError};
 use sandbox_agent_universal_agent_schema::{
-    codex as codex_schema, convert_amp, convert_claude, convert_codex, convert_opencode,
+    codex as codex_schema, convert_amp, convert_claude, convert_codebuff, convert_codex,
+    convert_opencode,
     AgentUnparsedData, ContentPart, ErrorData, EventConversion, EventSource, FileAction,
     ItemDeltaData, ItemEventData, ItemKind, ItemRole, ItemStatus, PermissionEventData,
     PermissionStatus, QuestionEventData, QuestionStatus, ReasoningVisibility, SessionEndReason,
@@ -3933,12 +3934,13 @@ async fn reply_permission(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn all_agents() -> [AgentId; 5] {
+fn all_agents() -> [AgentId; 6] {
     [
         AgentId::Claude,
         AgentId::Codex,
         AgentId::Opencode,
         AgentId::Amp,
+        AgentId::Codebuff,
         AgentId::Mock,
     ]
 }
@@ -3948,7 +3950,7 @@ fn all_agents() -> [AgentId; 5] {
 fn agent_supports_resume(agent: AgentId) -> bool {
     matches!(
         agent,
-        AgentId::Claude | AgentId::Amp | AgentId::Opencode | AgentId::Codex
+        AgentId::Claude | AgentId::Amp | AgentId::Opencode | AgentId::Codex | AgentId::Codebuff
     )
 }
 
@@ -4040,6 +4042,26 @@ fn agent_capabilities_for(agent: AgentId) -> AgentCapabilities {
             item_started: false,
             shared_process: false, // per-turn subprocess with --continue
         },
+        AgentId::Codebuff => AgentCapabilities {
+            plan_mode: true,
+            permissions: false,
+            questions: true, // via ask_user tool
+            tool_calls: true,
+            tool_results: true,
+            text_messages: true,
+            images: false,
+            file_attachments: true,
+            session_lifecycle: true,
+            error_events: true,
+            reasoning: true,
+            status: true, // subagent status events
+            command_execution: true,
+            file_changes: true,
+            mcp_tools: false,
+            streaming_deltas: true,
+            item_started: false, // we emit synthetic item.started
+            shared_process: false, // per-turn subprocess with --continue
+        },
         AgentId::Mock => AgentCapabilities {
             plan_mode: true,
             permissions: true,
@@ -4117,6 +4139,28 @@ fn agent_modes_for(agent: AgentId) -> Vec<AgentModeInfo> {
             name: "Build".to_string(),
             description: "Default build mode".to_string(),
         }],
+        AgentId::Codebuff => vec![
+            AgentModeInfo {
+                id: "build".to_string(),
+                name: "Build".to_string(),
+                description: "Default build mode".to_string(),
+            },
+            AgentModeInfo {
+                id: "FREE".to_string(),
+                name: "Free".to_string(),
+                description: "Lighter model, faster responses".to_string(),
+            },
+            AgentModeInfo {
+                id: "MAX".to_string(),
+                name: "Max".to_string(),
+                description: "Full capability mode".to_string(),
+            },
+            AgentModeInfo {
+                id: "PLAN".to_string(),
+                name: "Plan".to_string(),
+                description: "Planning-first mode".to_string(),
+            },
+        ],
         AgentId::Mock => vec![
             AgentModeInfo {
                 id: "build".to_string(),
@@ -4154,6 +4198,14 @@ fn normalize_agent_mode(agent: AgentId, agent_mode: Option<&str>) -> Result<Stri
         },
         AgentId::Amp => match mode {
             "build" => Ok("build".to_string()),
+            value => Err(SandboxError::ModeNotSupported {
+                agent: agent.as_str().to_string(),
+                mode: value.to_string(),
+            }
+            .into()),
+        },
+        AgentId::Codebuff => match mode {
+            "build" | "FREE" | "free" | "MAX" | "max" | "PLAN" | "plan" => Ok(mode.to_string()),
             value => Err(SandboxError::ModeNotSupported {
                 agent: agent.as_str().to_string(),
                 mode: value.to_string(),
@@ -4217,6 +4269,7 @@ fn normalize_permission_mode(
         AgentId::Codex => matches!(mode, "default" | "plan" | "bypass"),
         AgentId::Amp => matches!(mode, "default" | "bypass"),
         AgentId::Opencode => matches!(mode, "default"),
+        AgentId::Codebuff => matches!(mode, "default" | "bypass"),
         AgentId::Mock => matches!(mode, "default" | "plan" | "bypass"),
     };
     if !supported {
@@ -5002,6 +5055,8 @@ fn parse_agent_line(agent: AgentId, line: &str, session_id: &str) -> Vec<EventCo
                 .unwrap_or_else(|err| vec![agent_unparsed("amp", &err, value)]),
             Err(err) => vec![agent_unparsed("amp", &err.to_string(), value)],
         },
+        AgentId::Codebuff => convert_codebuff::event_to_universal(&value)
+            .unwrap_or_else(|err| vec![agent_unparsed("codebuff", &err, value)]),
         AgentId::Mock => vec![agent_unparsed(
             "mock",
             "mock agent does not parse streaming output",
