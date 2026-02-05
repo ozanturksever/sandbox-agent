@@ -86,7 +86,7 @@ impl ServerLogs {
                 None,
                 OPEN_ALWAYS,
                 FILE_ATTRIBUTE_NORMAL,
-                HANDLE(std::ptr::null_mut()),
+                HANDLE::default(),
             )
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err.to_string()))?;
 
