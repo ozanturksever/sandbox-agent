@@ -70,10 +70,11 @@ export async function updateVersion(opts: ReleaseOpts) {
 		const paths = await glob(globPath, { cwd: opts.root });
 		assert(paths.length > 0, `no paths matched: ${globPath}`);
 		for (const path of paths) {
-			const file = await fs.readFile(path, "utf-8");
-			assert(find.test(file), `file does not match ${find}: ${path}`);
+			const fullPath = `${opts.root}/${path}`;
+			const file = await fs.readFile(fullPath, "utf-8");
+			assert(find.test(file), `file does not match ${find}: ${fullPath}`);
 			const newFile = file.replace(find, replace);
-			await fs.writeFile(path, newFile);
+			await fs.writeFile(fullPath, newFile);
 
 			await $({ cwd: opts.root })`git add ${path}`;
 		}
