@@ -63,7 +63,7 @@
 				"group": "Reference",
 					"pages": [
 						"cli",
-						"opencode-sdk-ui-support",
+						"opencode-compatibility",
 						"inspector",
 						"session-transcript-schema",
 						"cors",
