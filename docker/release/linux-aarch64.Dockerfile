@@ -27,67 +27,34 @@ RUN cd sdks/typescript && SKIP_OPENAPI_GEN=1 pnpm exec tsup
 COPY frontend/packages/inspector ./frontend/packages/inspector
 RUN cd frontend/packages/inspector && pnpm exec vite build
 
-FROM rust:1.88.0 AS base
-
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    musl-tools \
-    musl-dev \
-    llvm-14-dev \
-    libclang-14-dev \
-    clang-14 \
-    libssl-dev \
-    pkg-config \
-    ca-certificates \
-    g++ \
-    git \
-    curl && \
-    rm -rf /var/lib/apt/lists/* && \
-    wget -q https://github.com/cross-tools/musl-cross/releases/latest/download/aarch64-unknown-linux-musl.tar.xz && \
-    tar -xf aarch64-unknown-linux-musl.tar.xz -C /opt/ && \
-    rm aarch64-unknown-linux-musl.tar.xz
-
-# Install musl targets
-RUN rustup target add aarch64-unknown-linux-musl
-
-# Set environment variables
-ENV PATH="/opt/aarch64-unknown-linux-musl/bin:$PATH" \
-    LIBCLANG_PATH=/usr/lib/llvm-14/lib \
-    CLANG_PATH=/usr/bin/clang-14 \
-    CC_aarch64_unknown_linux_musl=aarch64-unknown-linux-musl-gcc \
-    CXX_aarch64_unknown_linux_musl=aarch64-unknown-linux-musl-g++ \
-    AR_aarch64_unknown_linux_musl=aarch64-unknown-linux-musl-ar \
-    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-unknown-linux-musl-gcc \
-    CARGO_INCREMENTAL=0 \
-    RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-static-libgcc" \
-    CARGO_NET_GIT_FETCH_WITH_CLI=true
-
-# Set working directory
-WORKDIR /build
-
-# Build for aarch64
-FROM base AS aarch64-builder
+# Use Alpine with native musl for ARM64 builds (runs natively on ARM64 runner)
+FROM rust:1.88-alpine AS aarch64-builder
 
 # Accept version as build arg
 ARG SANDBOX_AGENT_VERSION
 ENV SANDBOX_AGENT_VERSION=${SANDBOX_AGENT_VERSION}
 
-# Set up OpenSSL for aarch64 musl target
-ENV SSL_VER=1.1.1w
-RUN wget https://www.openssl.org/source/openssl-$SSL_VER.tar.gz \
-    && tar -xzf openssl-$SSL_VER.tar.gz \
-    && cd openssl-$SSL_VER \
-    && ./Configure no-shared no-async --prefix=/musl --openssldir=/musl/ssl linux-aarch64 \
-    && make -j$(nproc) \
-    && make install_sw \
-    && cd .. \
-    && rm -rf openssl-$SSL_VER*
+# Install dependencies
+RUN apk add --no-cache \
+    musl-dev \
+    clang \
+    llvm-dev \
+    openssl-dev \
+    openssl-libs-static \
+    pkgconfig \
+    git \
+    curl \
+    build-base
 
-# Configure OpenSSL env vars for the build
-ENV OPENSSL_DIR=/musl \
-    OPENSSL_INCLUDE_DIR=/musl/include \
-    OPENSSL_LIB_DIR=/musl/lib \
-    PKG_CONFIG_ALLOW_CROSS=1
+# Add musl target
+RUN rustup target add aarch64-unknown-linux-musl
+
+# Set environment variables for native musl build
+ENV CARGO_INCREMENTAL=0 \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    RUSTFLAGS="-C target-feature=+crt-static"
+
+WORKDIR /build
 
 # Copy the source code
 COPY . .
