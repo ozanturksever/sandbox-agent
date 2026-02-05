@@ -1,6 +1,6 @@
 'use client';
 
-import { Workflow, Server, Database, Download, Globe } from 'lucide-react';
+import { Workflow, Server, Database, Download, Globe, Plug } from 'lucide-react';
 import { FeatureIcon } from './ui/FeatureIcon';
 
 export function FeatureGrid() {
@@ -136,6 +136,31 @@ export function FeatureGrid() {
             </div>
             <p className="text-zinc-400 text-sm leading-relaxed">
               Lightweight static binary. One curl command to install inside E2B, Daytona, Vercel Sandboxes, or Docker.
+            </p>
+          </div>
+
+          {/* OpenCode SDK & UI Support */}
+          <div className="group relative flex flex-col gap-4 overflow-hidden rounded-2xl border border-white/5 bg-zinc-900/30 p-6 backdrop-blur-sm transition-colors duration-500 hover:bg-zinc-900/50">
+            {/* Top Shine Highlight */}
+            <div className="absolute left-0 right-0 top-0 z-10 h-[1px] bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+            {/* Top Left Reflection/Glow */}
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(236,72,153,0.15)_0%,transparent_50%)] opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+            {/* Sharp Edge Highlight */}
+            <div className="pointer-events-none absolute left-0 top-0 z-20 h-24 w-24 rounded-tl-2xl border-l border-t border-pink-500 opacity-0 transition-opacity duration-500 [mask-image:linear-gradient(135deg,black_0%,transparent_50%)] group-hover:opacity-100" />
+
+            <div className="relative z-10 mb-2 flex items-center gap-3">
+              <FeatureIcon
+                icon={Plug}
+                color="text-pink-400"
+                bgColor="bg-pink-500/10"
+                hoverBgColor="group-hover:bg-pink-500/20"
+                glowShadow="group-hover:shadow-[0_0_15px_rgba(236,72,153,0.5)]"
+              />
+              <h4 className="text-sm font-medium uppercase tracking-wider text-white">OpenCode SDK & UI</h4>
+              <span className="rounded-full bg-pink-500/20 px-2 py-0.5 text-xs font-medium text-pink-300">Experimental</span>
+            </div>
+            <p className="text-zinc-400 text-sm leading-relaxed">
+              Connect OpenCode CLI, SDK, or web UI to control agents through familiar OpenCode tooling.
             </p>
           </div>
         </div>
