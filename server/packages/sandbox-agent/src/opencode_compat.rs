@@ -655,6 +655,7 @@ fn agent_display_name(agent: AgentId) -> &'static str {
         AgentId::Opencode => "OpenCode",
         AgentId::Amp => "Amp",
         AgentId::Mock => "Mock",
+        AgentId::Pi => "Pi",
     }
 }
 
