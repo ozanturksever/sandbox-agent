@@ -614,6 +614,7 @@ fn available_agent_ids() -> Vec<AgentId> {
         AgentId::Codex,
         AgentId::Opencode,
         AgentId::Amp,
+        AgentId::Pi,
         AgentId::Mock,
     ]
 }
