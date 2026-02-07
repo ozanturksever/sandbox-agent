@@ -349,25 +349,26 @@ pub fn start(cli: &CliConfig, host: &str, port: u16, token: Option<&str>) -> Res
     Ok(())
 }
 
+/// Find the PID of a process listening on the given port using lsof.
 #[cfg(unix)]
-pub fn stop(host: &str, port: u16) -> Result<(), CliError> {
-    let pid_path = daemon_pid_path(host, port);
+fn find_process_on_port(port: u16) -> Option<u32> {
+    let output = std::process::Command::new("lsof")
+        .args(["-i", &format!(":{port}"), "-t", "-sTCP:LISTEN"])
+        .output()
+        .ok()?;
 
-    let pid = match read_pid(&pid_path) {
-        Some(pid) => pid,
-        None => {
-            eprintln!("daemon is not running (no PID file)");
-            return Ok(());
-        }
-    };
-
-    if !is_process_running(pid) {
-        eprintln!("daemon is not running (stale PID file)");
-        let _ = remove_pid(&pid_path);
-        let _ = remove_version_file(host, port);
-        return Ok(());
+    if !output.status.success() {
+        return None;
     }
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // lsof -t returns just the PID(s), one per line
+    stdout.lines().next()?.trim().parse::<u32>().ok()
+}
+
+/// Stop a process by PID with SIGTERM then SIGKILL if needed.
+#[cfg(unix)]
+fn stop_process(pid: u32, host: &str, port: u16, pid_path: &Path) -> Result<(), CliError> {
     eprintln!("stopping daemon (PID {pid})...");
 
     // SIGTERM
@@ -379,7 +380,7 @@ pub fn stop(host: &str, port: u16) -> Result<(), CliError> {
     for _ in 0..50 {
         std::thread::sleep(Duration::from_millis(100));
         if !is_process_running(pid) {
-            let _ = remove_pid(&pid_path);
+            let _ = remove_pid(pid_path);
             let _ = remove_version_file(host, port);
             eprintln!("daemon stopped");
             return Ok(());
@@ -392,10 +393,46 @@ pub fn stop(host: &str, port: u16) -> Result<(), CliError> {
         libc::kill(pid as i32, libc::SIGKILL);
     }
     std::thread::sleep(Duration::from_millis(100));
-    let _ = remove_pid(&pid_path);
+    let _ = remove_pid(pid_path);
     let _ = remove_version_file(host, port);
     eprintln!("daemon killed");
     Ok(())
+}
+
+#[cfg(unix)]
+pub fn stop(host: &str, port: u16) -> Result<(), CliError> {
+    let base_url = format!("http://{host}:{port}");
+    let pid_path = daemon_pid_path(host, port);
+
+    let pid = match read_pid(&pid_path) {
+        Some(pid) => pid,
+        None => {
+            // No PID file - but check if daemon is actually running via health check
+            // This can happen if PID file was deleted but daemon is still running
+            if check_health(&base_url, None)? {
+                eprintln!("daemon is running but PID file missing; finding process on port {port}...");
+                if let Some(pid) = find_process_on_port(port) {
+                    eprintln!("found daemon process {pid}");
+                    return stop_process(pid, host, port, &pid_path);
+                } else {
+                    return Err(CliError::Server(format!(
+                        "daemon is running on port {port} but cannot find PID"
+                    )));
+                }
+            }
+            eprintln!("daemon is not running (no PID file)");
+            return Ok(());
+        }
+    };
+
+    if !is_process_running(pid) {
+        eprintln!("daemon is not running (stale PID file)");
+        let _ = remove_pid(&pid_path);
+        let _ = remove_version_file(host, port);
+        return Ok(());
+    }
+
+    stop_process(pid, host, port, &pid_path)
 }
 
 #[cfg(windows)]
