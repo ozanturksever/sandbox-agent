@@ -52,6 +52,7 @@ const OPENCODE_EVENT_LOG_SIZE: usize = 4096;
 const OPENCODE_DEFAULT_MODEL_ID: &str = "mock";
 const OPENCODE_DEFAULT_PROVIDER_ID: &str = "mock";
 const OPENCODE_DEFAULT_AGENT_MODE: &str = "build";
+const OPENCODE_MODEL_CHANGE_AFTER_SESSION_CREATE_ERROR: &str = "OpenCode compatibility currently does not support changing the model after creating a session. Export with /export and load in to a new session.";
 
 #[derive(Clone, Debug)]
 struct OpenCodeStreamEvent {
@@ -668,6 +669,12 @@ struct OpenCodeCreateSessionRequest {
 #[serde(rename_all = "camelCase")]
 struct OpenCodeUpdateSessionRequest {
     title: Option<String>,
+    #[schema(value_type = String)]
+    model: Option<Value>,
+    #[serde(rename = "providerID", alias = "provider_id")]
+    provider_id: Option<String>,
+    #[serde(rename = "modelID", alias = "model_id")]
+    model_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -3850,11 +3857,30 @@ async fn oc_session_get(
 async fn oc_session_update(
     State(state): State<Arc<OpenCodeAppState>>,
     Path(session_id): Path<String>,
-    Json(body): Json<OpenCodeUpdateSessionRequest>,
+    Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let mut sessions = state.opencode.sessions.lock().await;
     if let Some(session) = sessions.get_mut(&session_id) {
-        if let Some(title) = body.title {
+        let requests_model_change = body
+            .as_object()
+            .map(|obj| {
+                obj.contains_key("model")
+                    || obj.contains_key("providerID")
+                    || obj.contains_key("modelID")
+                    || obj.contains_key("provider_id")
+                    || obj.contains_key("model_id")
+                    || obj.contains_key("providerId")
+                    || obj.contains_key("modelId")
+            })
+            .unwrap_or(false);
+        if requests_model_change {
+            return bad_request(OPENCODE_MODEL_CHANGE_AFTER_SESSION_CREATE_ERROR).into_response();
+        }
+        if let Some(title) = body
+            .get("title")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string())
+        {
             if let Err(err) = state
                 .inner
                 .session_manager()

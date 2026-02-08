@@ -313,6 +313,29 @@ describe("OpenCode-compatible Session API", () => {
       const response = await client.session.get({ path: { id: sessionId } });
       expect(response.data?.title).toBe("Updated");
     });
+
+    it("should reject model changes after session creation", async () => {
+      const created = await client.session.create({ body: { title: "Original" } });
+      const sessionId = created.data?.id!;
+
+      const response = await fetch(`${handle.baseUrl}/opencode/session/${sessionId}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${handle.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          providerID: "codex",
+          modelID: "gpt-5",
+        }),
+      });
+      const data = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(data?.errors?.[0]?.message).toBe(
+        "OpenCode compatibility currently does not support changing the model after creating a session. Export with /export and load in to a new session."
+      );
+    });
   });
 
   describe("session.delete", () => {
