@@ -36,6 +36,12 @@ case $TARGET in
     TARGET_STAGE="aarch64-builder"
     BINARY="sandbox-agent-$TARGET"
     ;;
+  aarch64-unknown-linux-musl)
+    echo "Building for Linux aarch64 musl"
+    DOCKERFILE="linux-aarch64.Dockerfile"
+    TARGET_STAGE="aarch64-builder"
+    BINARY="sandbox-agent-$TARGET"
+    ;;
   *)
     echo "Unsupported target: $TARGET"
     exit 1
