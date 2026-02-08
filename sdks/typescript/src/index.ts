@@ -51,3 +51,6 @@ export type {
 } from "./types.ts";
 export type { components, paths } from "./generated/openapi.ts";
 export type { SandboxAgentSpawnOptions, SandboxAgentSpawnLogMode } from "./spawn.ts";
+
+// OOSS Integration (also available as 'sandbox-agent/ooss')
+export * from "./integrations/ooss/index.ts";

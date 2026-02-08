@@ -112,6 +112,7 @@ const ChatPanel = ({
     codex: "Codex",
     opencode: "OpenCode",
     amp: "Amp",
+    codebuff: "Codebuff",
     mock: "Mock"
   };
 

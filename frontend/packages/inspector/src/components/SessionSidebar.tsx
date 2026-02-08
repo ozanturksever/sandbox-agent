@@ -45,6 +45,7 @@ const SessionSidebar = ({
     codex: "Codex",
     opencode: "OpenCode",
     amp: "Amp",
+    codebuff: "Codebuff",
     mock: "Mock"
   };
 

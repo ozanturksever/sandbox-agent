@@ -4,14 +4,14 @@ Source of truth: generated agent schemas in `resources/agent-schemas/artifacts/j
 
 Identifiers
 
-+----------------------+------------------------+------------------------------------------+-----------------------------+------------------------+
-| Universal term       | Claude                 | Codex (app-server)                       | OpenCode                    | Amp                    |
-+----------------------+------------------------+------------------------------------------+-----------------------------+------------------------+
-| session_id           | n/a (daemon-only)      | n/a (daemon-only)                        | n/a (daemon-only)           | n/a (daemon-only)      |
-| native_session_id    | none                   | threadId                                 | sessionID                   | none                   |
-| item_id              | synthetic              | ThreadItem.id                            | Message.id                  | StreamJSONMessage.id   |
-| native_item_id       | none                   | ThreadItem.id                            | Message.id                  | StreamJSONMessage.id   |
-+----------------------+------------------------+------------------------------------------+-----------------------------+------------------------+
++----------------------+------------------------+------------------------------------------+-----------------------------+------------------------+------------------------+
+| Universal term       | Claude                 | Codex (app-server)                       | OpenCode                    | Amp                    | Codebuff               |
++----------------------+------------------------+------------------------------------------+-----------------------------+------------------------+------------------------+
+| session_id           | n/a (daemon-only)      | n/a (daemon-only)                        | n/a (daemon-only)           | n/a (daemon-only)      | n/a (daemon-only)      |
+| native_session_id    | none                   | threadId                                 | sessionID                   | none                   | agentId                |
+| item_id              | synthetic              | ThreadItem.id                            | Message.id                  | StreamJSONMessage.id   | synthetic              |
+| native_item_id       | none                   | ThreadItem.id                            | Message.id                  | StreamJSONMessage.id   | agentId/toolCallId     |
++----------------------+------------------------+------------------------------------------+-----------------------------+------------------------+------------------------+
 
 Notes:
 - When a provider does not supply IDs (Claude), we synthesize item_id values and keep native_item_id null.
@@ -24,22 +24,22 @@ Notes:
 
 Events / Message Flow
 
-+------------------------+------------------------------+--------------------------------------------+-----------------------------------------+----------------------------------+
-| Universal term         | Claude                       | Codex (app-server)                         | OpenCode                                | Amp                              |
-+------------------------+------------------------------+--------------------------------------------+-----------------------------------------+----------------------------------+
-| session.started        | none                         | method=thread/started                      | type=session.created                    | none                             |
-| session.ended          | SDKMessage.type=result       | no explicit session end (turn/completed)   | no explicit session end (session.deleted)| type=done                        |
-| message (user)         | SDKMessage.type=user         | item/completed (ThreadItem.type=userMessage)| message.updated (Message.role=user)    | type=message                     |
-| message (assistant)    | SDKMessage.type=assistant    | item/completed (ThreadItem.type=agentMessage)| message.updated (Message.role=assistant)| type=message                  |
-| message.delta          | stream_event (partial) or synthetic | method=item/agentMessage/delta      | type=message.part.updated (delta)       | synthetic                        |
-| tool call              | type=tool_use               | method=item/mcpToolCall/progress           | message.part.updated (part.type=tool)   | type=tool_call                   |
-| tool result            | user.message.content.tool_result | item/completed (tool result ThreadItem variants) | message.part.updated (part.type=tool, state=completed) | type=tool_result     |
-| permission.requested   | control_request.can_use_tool | none                                      | type=permission.asked                   | none                             |
-| permission.resolved    | daemon reply to can_use_tool | none                                      | type=permission.replied                 | none                             |
-| question.requested     | tool_use (AskUserQuestion)  | experimental request_user_input (payload) | type=question.asked                     | none                             |
-| question.resolved      | tool_result (AskUserQuestion) | experimental request_user_input (payload) | type=question.replied / question.rejected | none                          |
-| error                  | SDKResultMessage.error       | method=error                               | type=session.error (or message error)   | type=error                        |
-+------------------------+------------------------------+--------------------------------------------+-----------------------------------------+----------------------------------+
++------------------------+------------------------------+--------------------------------------------+-----------------------------------------+----------------------------------+----------------------------------+
+| Universal term         | Claude                       | Codex (app-server)                         | OpenCode                                | Amp                              | Codebuff                         |
++------------------------+------------------------------+--------------------------------------------+-----------------------------------------+----------------------------------+----------------------------------+
+| session.started        | none                         | method=thread/started                      | type=session.created                    | none                             | type=start                       |
+| session.ended          | SDKMessage.type=result       | no explicit session end (turn/completed)   | no explicit session end (session.deleted)| type=done                        | type=finish                      |
+| message (user)         | SDKMessage.type=user         | item/completed (ThreadItem.type=userMessage)| message.updated (Message.role=user)    | type=message                     | synthetic (input not echoed)     |
+| message (assistant)    | SDKMessage.type=assistant    | item/completed (ThreadItem.type=agentMessage)| message.updated (Message.role=assistant)| type=message                  | type=text                        |
+| message.delta          | stream_event (partial) or synthetic | method=item/agentMessage/delta      | type=message.part.updated (delta)       | synthetic                        | type=text (native)               |
+| tool call              | type=tool_use               | method=item/mcpToolCall/progress           | message.part.updated (part.type=tool)   | type=tool_call                   | type=tool_call                   |
+| tool result            | user.message.content.tool_result | item/completed (tool result ThreadItem variants) | message.part.updated (part.type=tool, state=completed) | type=tool_result     | type=tool_result                 |
+| permission.requested   | control_request.can_use_tool | none                                      | type=permission.asked                   | none                             | none                             |
+| permission.resolved    | daemon reply to can_use_tool | none                                      | type=permission.replied                 | none                             | none                             |
+| question.requested     | tool_use (AskUserQuestion)  | experimental request_user_input (payload) | type=question.asked                     | none                             | tool_use (ask_user)              |
+| question.resolved      | tool_result (AskUserQuestion) | experimental request_user_input (payload) | type=question.replied / question.rejected | none                          | tool_result (ask_user)           |
+| error                  | SDKResultMessage.error       | method=error                               | type=session.error (or message error)   | type=error                        | type=error                       |
++------------------------+------------------------------+--------------------------------------------+-----------------------------------------+----------------------------------+----------------------------------+
 
 Synthetics
 
@@ -58,12 +58,19 @@ Synthetics
 +------------------------------+------------------------+--------------------------+--------------------------------------------------------------+
 | message.delta (OpenCode)     | part delta before message       | item.delta             | If part arrives first, create item.started stub then delta     |
 +------------------------------+------------------------+--------------------------+--------------------------------------------------------------+
+| item.started (Codebuff)      | Before tool_call/tool_result    | item.started           | Synthetic item.started emitted before item.completed; source=daemon |
+| item_id (Codebuff)           | Codebuff provides limited IDs   | item_id                | Generated via counter (codebuff_tool_result_N, etc.)          |
+| user message (Codebuff)      | Input prompt not echoed         | item.completed         | Mark source=daemon if user message needs synthesis             |
+| question events (Codebuff)   | ask_user tool usage             | question.requested/resolved | Derived from tool_call/tool_result for ask_user tool       |
+| subagent tracking (Codebuff) | subagent_start/subagent_finish  | item.started/completed | Status items with label=subagent:{type}                        |
++------------------------------+------------------------+--------------------------+--------------------------------------------------------------+
 
 Delta handling
 
 - Codex emits agent message and other deltas (e.g., item/agentMessage/delta).
 - OpenCode emits part deltas via message.part.updated with a delta string.
 - Claude can emit stream_event deltas when partial streaming is enabled; Amp does not emit deltas.
+- Codebuff emits native text deltas via type=text events and reasoning deltas via type=reasoning_delta.
 
 Policy:
 - Always emit item.delta across all providers.
@@ -76,7 +83,7 @@ Message normalization notes
 - user vs assistant: normalized via role in the universal item; provider role fields or item types determine role.
 - file artifacts: always represented as content parts (type=file_ref) inside message/tool_result items, not a separate item kind.
 - reasoning: represented as content parts (type=reasoning) inside message items, with visibility when available.
-- subagents: OpenCode subtask parts and Claude Task tool usage are currently normalized into standard message/tool flow (no dedicated subagent fields).
+- subagents: OpenCode subtask parts and Claude Task tool usage are currently normalized into standard message/tool flow (no dedicated subagent fields). Codebuff emits subagent_start/subagent_finish events which are converted to status items with label=subagent:{type}.
 - OpenCode unrolling: message.updated creates/updates the parent message item; tool-related parts emit separate tool item events (item.started/ item.completed) with parent_id pointing to the message item.
 - If a message.part.updated arrives before message.updated, we create a stub item.started (source=daemon) so deltas have a parent.
 - Tool calls/results are always emitted as separate tool items to keep behavior consistent across agents.
