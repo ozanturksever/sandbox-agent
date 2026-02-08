@@ -39,6 +39,6 @@
     "vitest": "^3.0.0"
   },
   "optionalDependencies": {
-    "@sandbox-agent/cli": "0.1.0"
+    "@sandbox-agent/cli": "workspace:*"
   }
 }

@@ -423,6 +423,10 @@ importers:
       '@sandbox-agent/cli-shared':
         specifier: workspace:*
         version: link:../cli-shared
+    optionalDependencies:
+      '@sandbox-agent/cli':
+        specifier: workspace:*
+        version: link:../cli
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
