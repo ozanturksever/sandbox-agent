@@ -21,6 +21,7 @@ pub enum AgentId {
     Codex,
     Opencode,
     Amp,
+    Cursor,
     Mock,
 }
 
@@ -31,6 +32,7 @@ impl AgentId {
             AgentId::Codex => "codex",
             AgentId::Opencode => "opencode",
             AgentId::Amp => "amp",
+            AgentId::Cursor => "cursor",
             AgentId::Mock => "mock",
         }
     }
@@ -41,6 +43,7 @@ impl AgentId {
             AgentId::Codex => "codex",
             AgentId::Opencode => "opencode",
             AgentId::Amp => "amp",
+            AgentId::Cursor => "cursor-agent",
             AgentId::Mock => "mock",
         }
     }
@@ -51,6 +54,7 @@ impl AgentId {
             "codex" => Some(AgentId::Codex),
             "opencode" => Some(AgentId::Opencode),
             "amp" => Some(AgentId::Amp),
+            "cursor" => Some(AgentId::Cursor),
             "mock" => Some(AgentId::Mock),
             _ => None,
         }
@@ -151,6 +155,7 @@ impl AgentManager {
                 install_opencode(&install_path, self.platform, options.version.as_deref())?
             }
             AgentId::Amp => install_amp(&install_path, self.platform, options.version.as_deref())?,
+            AgentId::Cursor => install_cursor(&install_path, self.platform, options.version.as_deref())?,
             AgentId::Mock => {
                 if !install_path.exists() {
                     fs::write(&install_path, b"mock")?;
@@ -262,6 +267,18 @@ impl AgentManager {
                 }
                 if let Some(variant) = options.variant.as_deref() {
                     command.arg("--variant").arg(variant);
+                }
+                if let Some(session_id) = options.session_id.as_deref() {
+                    command.arg("-s").arg(session_id);
+                }
+                command.arg(&options.prompt);
+            }
+            AgentId::Cursor => {
+                // cursor-agent typically runs as HTTP server on localhost:32123
+                // For CLI usage similar to opencode
+                command.arg("run").arg("--format").arg("json");
+                if let Some(model) = options.model.as_deref() {
+                    command.arg("-m").arg(model);
                 }
                 if let Some(session_id) = options.session_id.as_deref() {
                     command.arg("-s").arg(session_id);
@@ -1185,6 +1202,30 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn install_cursor(path: &Path, platform: Platform, _version: Option<&str>) -> Result<(), AgentError> {
+    // Note: cursor-agent binary URL needs to be verified
+    // Cursor Pro includes cursor-agent, typically installed via: curl -fsS https://cursor.com/install | bash
+    // For sandbox-agent, we need standalone cursor-agent binary
+    // TODO: Determine correct download URL for cursor-agent releases
+
+    let platform_segment = match platform {
+        Platform::LinuxX64 | Platform::LinuxX64Musl => "linux-x64",
+        Platform::LinuxArm64 => "linux-arm64",
+        Platform::MacosArm64 => "darwin-arm64",
+        Platform::MacosX64 => "darwin-x64",
+    };
+
+    // Placeholder URL - needs to be updated with actual cursor-agent release URL
+    let url = Url::parse(&format!(
+        "https://cursor.com/api/v1/releases/latest/download/cursor-agent-{platform_segment}",
+        platform_segment = platform_segment
+    ))?;
+
+    let bytes = download_bytes(&url)?;
+    write_executable(path, &bytes)?;
+    Ok(())
 }
 
 fn download_bytes(url: &Url) -> Result<Vec<u8>, AgentError> {
