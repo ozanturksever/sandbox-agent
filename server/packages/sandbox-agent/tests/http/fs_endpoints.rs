@@ -209,7 +209,10 @@ async fn fs_upload_batch_truncates_paths() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(paths.len(), 1024);
-    assert_eq!(payload.get("truncated").and_then(|value| value.as_bool()), Some(true));
+    assert_eq!(
+        payload.get("truncated").and_then(|value| value.as_bool()),
+        Some(true)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

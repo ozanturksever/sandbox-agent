@@ -19,9 +19,9 @@ use crate::router::{
     SkillsConfig,
 };
 use crate::router::{
-    AgentListResponse, AgentModelsResponse, AgentModesResponse, CreateSessionResponse, EventsResponse,
-    FsActionResponse, FsEntry, FsMoveRequest, FsMoveResponse, FsStat, FsUploadBatchResponse,
-    FsWriteResponse, SessionListResponse,
+    AgentListResponse, AgentModelsResponse, AgentModesResponse, CreateSessionResponse,
+    EventsResponse, FsActionResponse, FsEntry, FsMoveRequest, FsMoveResponse, FsStat,
+    FsUploadBatchResponse, FsWriteResponse, SessionListResponse,
 };
 use crate::server_logs::ServerLogs;
 use crate::telemetry;
@@ -855,10 +855,9 @@ fn run_sessions(command: &SessionsCommand, cli: &CliConfig) -> Result<(), CliErr
             let ctx = ClientContext::new(cli, &args.client)?;
             let mcp = if let Some(path) = &args.mcp_config {
                 let text = std::fs::read_to_string(path)?;
-                let parsed =
-                    serde_json::from_str::<std::collections::BTreeMap<String, McpServerConfig>>(
-                        &text,
-                    )?;
+                let parsed = serde_json::from_str::<
+                    std::collections::BTreeMap<String, McpServerConfig>,
+                >(&text)?;
                 Some(parsed)
             } else {
                 None

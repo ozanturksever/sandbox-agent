@@ -18,6 +18,7 @@ use axum::response::{IntoResponse, Response, Sse};
 use axum::routing::{delete, get, post};
 use axum::Json;
 use axum::Router;
+use base64::Engine;
 use futures::{stream, StreamExt};
 use reqwest::Client;
 use sandbox_agent_error::{AgentError, ErrorType, ProblemDetails, SandboxError};
@@ -33,14 +34,13 @@ use sandbox_agent_universal_agent_schema::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use tar::Archive;
 use tokio::sync::futures::OwnedNotified;
 use tokio::sync::{broadcast, mpsc, oneshot, Mutex, Notify};
 use tokio::time::sleep;
 use tokio_stream::wrappers::BroadcastStream;
-use tower_http::trace::TraceLayer;
-use base64::Engine;
-use tar::Archive;
 use toml_edit::{value, Array, DocumentMut, Item, Table};
+use tower_http::trace::TraceLayer;
 use tracing::Span;
 use utoipa::{Modify, OpenApi, ToSchema};
 
@@ -4896,11 +4896,7 @@ pub struct HealthResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FsPathQuery {
     pub path: String,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "session_id"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
     pub session_id: Option<String>,
 }
 
@@ -4909,22 +4905,14 @@ pub struct FsPathQuery {
 pub struct FsEntriesQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "session_id"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
     pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FsSessionQuery {
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "session_id"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
     pub session_id: Option<String>,
 }
 
@@ -4932,11 +4920,7 @@ pub struct FsSessionQuery {
 #[serde(rename_all = "camelCase")]
 pub struct FsDeleteQuery {
     pub path: String,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "session_id"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recursive: Option<bool>,
@@ -4947,11 +4931,7 @@ pub struct FsDeleteQuery {
 pub struct FsUploadBatchQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        alias = "session_id"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
     pub session_id: Option<String>,
 }
 
@@ -5079,7 +5059,11 @@ pub enum McpServerConfig {
         command: McpCommand,
         #[serde(default)]
         args: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none", alias = "environment")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            alias = "environment"
+        )]
         env: Option<BTreeMap<String, String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enabled: Option<bool>,
@@ -5782,10 +5766,11 @@ async fn fs_entries(
         } else {
             FsEntryType::File
         };
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339().into());
+        let modified = metadata.modified().ok().and_then(|time| {
+            chrono::DateTime::<chrono::Utc>::from(time)
+                .to_rfc3339()
+                .into()
+        });
         entries.push(FsEntry {
             name: entry.file_name().to_string_lossy().to_string(),
             path: path.to_string_lossy().to_string(),
@@ -5986,10 +5971,11 @@ async fn fs_stat(
     } else {
         FsEntryType::File
     };
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339().into());
+    let modified = metadata.modified().ok().and_then(|time| {
+        chrono::DateTime::<chrono::Utc>::from(time)
+            .to_rfc3339()
+            .into()
+    });
     Ok(Json(FsStat {
         path: target.to_string_lossy().to_string(),
         entry_type,
@@ -6058,9 +6044,11 @@ async fn fs_upload_batch(
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).map_err(|err| map_fs_error(parent, err))?;
         }
-        entry.unpack(&dest).map_err(|err| SandboxError::StreamError {
-            message: err.to_string(),
-        })?;
+        entry
+            .unpack(&dest)
+            .map_err(|err| SandboxError::StreamError {
+                message: err.to_string(),
+            })?;
         if extracted.len() < 1024 {
             extracted.push(dest.to_string_lossy().to_string());
         } else {
@@ -6911,7 +6899,10 @@ mod tests {
         let result = resolve_skill_source(&source, tmp.path());
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("unsupported"), "expected 'unsupported' in: {msg}");
+        assert!(
+            msg.contains("unsupported"),
+            "expected 'unsupported' in: {msg}"
+        );
     }
 
     #[test]
@@ -6940,11 +6931,7 @@ mod tests {
         // Verify symlinks were created
         for root in SKILL_ROOTS {
             let link = work.path().join(root).join("alpha");
-            assert!(
-                link.exists(),
-                "expected skill link at {}",
-                link.display()
-            );
+            assert!(link.exists(), "expected skill link at {}", link.display());
             assert!(link.join("SKILL.md").exists());
         }
     }
@@ -6998,7 +6985,10 @@ mod tests {
 
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("no skills found"), "expected 'no skills found' in: {msg}");
+        assert!(
+            msg.contains("no skills found"),
+            "expected 'no skills found' in: {msg}"
+        );
     }
 
     #[test]
@@ -7090,7 +7080,10 @@ mod tests {
 
         // ensure_skill_link should replace the dangling symlink
         let result = ensure_skill_link(skill.path(), &dest);
-        assert!(result.is_ok(), "should replace dangling symlink: {result:?}");
+        assert!(
+            result.is_ok(),
+            "should replace dangling symlink: {result:?}"
+        );
         assert!(dest.exists(), "link should now point to valid target");
         assert!(dest.join("SKILL.md").exists());
     }
@@ -7178,15 +7171,27 @@ mod tests {
         }
 
         // Verify files were extracted without the prefix directory
-        assert!(dest.join("SKILL.md").exists(), "SKILL.md should exist at root");
-        assert_eq!(fs::read_to_string(dest.join("SKILL.md")).unwrap(), "# Test Skill");
-        assert!(dest.join("sub/nested.txt").exists(), "nested file should exist");
+        assert!(
+            dest.join("SKILL.md").exists(),
+            "SKILL.md should exist at root"
+        );
+        assert_eq!(
+            fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            "# Test Skill"
+        );
+        assert!(
+            dest.join("sub/nested.txt").exists(),
+            "nested file should exist"
+        );
         assert_eq!(
             fs::read_to_string(dest.join("sub/nested.txt")).unwrap(),
             "nested content"
         );
         // Ensure no prefix directory leaked through
-        assert!(!dest.join("owner-repo-abc123").exists(), "prefix dir should be stripped");
+        assert!(
+            !dest.join("owner-repo-abc123").exists(),
+            "prefix dir should be stripped"
+        );
     }
 }
 
@@ -7521,10 +7526,7 @@ fn ensure_skill_link(target: &StdPath, dest: &StdPath) -> Result<(), SandboxErro
             }
         }
         return Err(SandboxError::InvalidRequest {
-            message: format!(
-                "skill path conflict: {} already exists",
-                dest.display()
-            ),
+            message: format!("skill path conflict: {} already exists", dest.display()),
         });
     }
     // Remove dangling symlinks (exists() follows symlinks and returns false for dangling ones)
@@ -7637,10 +7639,14 @@ fn write_codex_mcp_config(mcp: &BTreeMap<String, McpServerConfig>) -> Result<(),
     } else {
         DocumentMut::new()
     };
-    let mcp_item = doc.entry("mcp_servers").or_insert(Item::Table(Table::new()));
-    let mcp_table = mcp_item.as_table_mut().ok_or_else(|| SandboxError::InvalidRequest {
-        message: "invalid Codex config.toml: mcp_servers must be a table".to_string(),
-    })?;
+    let mcp_item = doc
+        .entry("mcp_servers")
+        .or_insert(Item::Table(Table::new()));
+    let mcp_table = mcp_item
+        .as_table_mut()
+        .ok_or_else(|| SandboxError::InvalidRequest {
+            message: "invalid Codex config.toml: mcp_servers must be a table".to_string(),
+        })?;
     for (name, config) in mcp {
         let table = codex_mcp_table(config)?;
         mcp_table.insert(name, Item::Table(table));
@@ -7660,11 +7666,11 @@ fn apply_amp_mcp_config(
     agent_manager: &AgentManager,
     mcp: &BTreeMap<String, McpServerConfig>,
 ) -> Result<(), SandboxError> {
-    let path = agent_manager
-        .resolve_binary(AgentId::Amp)
-        .map_err(|_| SandboxError::AgentNotInstalled {
+    let path = agent_manager.resolve_binary(AgentId::Amp).map_err(|_| {
+        SandboxError::AgentNotInstalled {
             agent: "amp".to_string(),
-        })?;
+        }
+    })?;
     let cwd = std::env::current_dir().map_err(|err| SandboxError::StreamError {
         message: err.to_string(),
     })?;
@@ -7783,10 +7789,7 @@ fn opencode_mcp_config(config: &McpServerConfig) -> Result<Value, SandboxError> 
 fn claude_mcp_entry(config: &McpServerConfig) -> Result<Value, SandboxError> {
     match config {
         McpServerConfig::Local {
-            command,
-            args,
-            env,
-            ..
+            command, args, env, ..
         } => {
             let (cmd_name, cmd_args) = mcp_command_parts(command, args)?;
             let mut map = Map::new();
@@ -7923,12 +7926,11 @@ fn mcp_command_parts(
                 });
             }
             let mut iter = values.iter();
-            let cmd = iter
-                .next()
-                .map(|value| value.to_string())
-                .ok_or_else(|| SandboxError::InvalidRequest {
+            let cmd = iter.next().map(|value| value.to_string()).ok_or_else(|| {
+                SandboxError::InvalidRequest {
                     message: "mcp command cannot be empty".to_string(),
-                })?;
+                }
+            })?;
             let mut cmd_args = iter.map(|value| value.to_string()).collect::<Vec<_>>();
             cmd_args.extend(args.iter().cloned());
             Ok((cmd, cmd_args))
@@ -8045,12 +8047,10 @@ fn opencode_file_part_input(attachment: &MessageAttachment) -> Value {
     map.insert("type".to_string(), json!("file"));
     map.insert(
         "mime".to_string(),
-        json!(
-            attachment
-                .mime
-                .clone()
-                .unwrap_or_else(|| "application/octet-stream".to_string())
-        ),
+        json!(attachment
+            .mime
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string())),
     );
     map.insert("url".to_string(), json!(url));
     if let Some(filename) = filename {

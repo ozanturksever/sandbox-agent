@@ -195,7 +195,8 @@ async fn create_session_with_skill_sources() {
     let skill_dir = tempfile::tempdir().expect("create skill dir");
     let skill_path = skill_dir.path().join("my-test-skill");
     std::fs::create_dir_all(&skill_path).expect("create skill subdir");
-    std::fs::write(skill_path.join("SKILL.md"), "# Test Skill\nA test skill.").expect("write SKILL.md");
+    std::fs::write(skill_path.join("SKILL.md"), "# Test Skill\nA test skill.")
+        .expect("write SKILL.md");
 
     // Create session with local skill source
     let (status, payload) = send_json(
@@ -215,9 +216,16 @@ async fn create_session_with_skill_sources() {
         })),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "create session with skills: {payload}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "create session with skills: {payload}"
+    );
     assert!(
-        payload.get("healthy").and_then(Value::as_bool).unwrap_or(false),
+        payload
+            .get("healthy")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         "session should be healthy"
     );
 }
@@ -254,7 +262,11 @@ async fn create_session_with_skill_sources_filter() {
         })),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "create session with skill filter: {payload}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "create session with skill filter: {payload}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -280,7 +292,11 @@ async fn create_session_with_invalid_skill_source() {
     )
     .await;
     // Should fail with a 4xx or 5xx error
-    assert_ne!(status, StatusCode::OK, "session with invalid skill source should fail");
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "session with invalid skill source should fail"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -311,5 +327,9 @@ async fn create_session_with_skill_filter_no_match() {
         })),
     )
     .await;
-    assert_ne!(status, StatusCode::OK, "session with no matching skills should fail");
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "session with no matching skills should fail"
+    );
 }
