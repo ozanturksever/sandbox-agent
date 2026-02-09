@@ -3,11 +3,7 @@
  * Provides minimal helpers for connecting to and interacting with sandbox-agent servers.
  */
 
-import { createInterface } from "node:readline/promises";
-import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { SandboxAgent } from "sandbox-agent";
-import type { PermissionEventData, QuestionEventData } from "sandbox-agent";
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
@@ -27,10 +23,12 @@ export function buildInspectorUrl({
   baseUrl,
   token,
   headers,
+  sessionId,
 }: {
   baseUrl: string;
   token?: string;
   headers?: Record<string, string>;
+  sessionId?: string;
 }): string {
   const normalized = normalizeBaseUrl(ensureUrl(baseUrl));
   const params = new URLSearchParams();
@@ -41,7 +39,8 @@ export function buildInspectorUrl({
     params.set("headers", JSON.stringify(headers));
   }
   const queryString = params.toString();
-  return `${normalized}/ui/${queryString ? `?${queryString}` : ""}`;
+  const sessionPath = sessionId ? `sessions/${sessionId}` : "";
+  return `${normalized}/ui/${sessionPath}${queryString ? `?${queryString}` : ""}`;
 }
 
 export function logInspectorUrl({
@@ -110,125 +109,39 @@ export async function waitForHealth({
   throw (lastError ?? new Error("Timed out waiting for /v1/health")) as Error;
 }
 
-function detectAgent(): string {
+export function generateSessionId(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "session-";
+  for (let i = 0; i < 8; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
+
+export function detectAgent(): string {
   if (process.env.SANDBOX_AGENT) return process.env.SANDBOX_AGENT;
-  if (process.env.ANTHROPIC_API_KEY) return "claude";
-  if (process.env.OPENAI_API_KEY) return "codex";
+  const hasClaude = Boolean(
+    process.env.ANTHROPIC_API_KEY ||
+    process.env.CLAUDE_API_KEY ||
+    process.env.CLAUDE_CODE_OAUTH_TOKEN ||
+    process.env.ANTHROPIC_AUTH_TOKEN,
+  );
+  const openAiLikeKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || "";
+  const hasCodexApiKey = openAiLikeKey.startsWith("sk-");
+  if (hasCodexApiKey && hasClaude) {
+    console.log("Both Claude and Codex API keys detected; defaulting to codex. Set SANDBOX_AGENT to override.");
+    return "codex";
+  }
+  if (!hasCodexApiKey && openAiLikeKey) {
+    console.log("OpenAI/Codex credential is not an API key (expected sk-...), skipping codex auto-select.");
+  }
+  if (hasCodexApiKey) return "codex";
+  if (hasClaude) {
+    if (openAiLikeKey && !hasCodexApiKey) {
+      console.log("Using claude by default.");
+    }
+    return "claude";
+  }
   return "claude";
 }
 
-export async function runPrompt(baseUrl: string): Promise<void> {
-  console.log(`UI: ${buildInspectorUrl({ baseUrl })}`);
-
-  const client = await SandboxAgent.connect({ baseUrl });
-
-  const agent = detectAgent();
-  console.log(`Using agent: ${agent}`);
-  const sessionId = randomUUID();
-  await client.createSession(sessionId, { agent });
-  console.log(`Session ${sessionId}. Press Ctrl+C to quit.`);
-
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-  let isThinking = false;
-  let hasStartedOutput = false;
-  let turnResolve: (() => void) | null = null;
-  let sessionEnded = false;
-
-  const processEvents = async () => {
-    for await (const event of client.streamEvents(sessionId)) {
-      if (event.type === "item.started") {
-        const item = (event.data as any)?.item;
-        if (item?.role === "assistant") {
-          isThinking = true;
-          hasStartedOutput = false;
-          process.stdout.write("Thinking...");
-        }
-      }
-
-      if (event.type === "item.delta" && isThinking) {
-        const delta = (event.data as any)?.delta;
-        if (delta) {
-          if (!hasStartedOutput) {
-            process.stdout.write("\r\x1b[K");
-            hasStartedOutput = true;
-          }
-          const text = typeof delta === "string" ? delta : delta.type === "text" ? delta.text || "" : "";
-          if (text) process.stdout.write(text);
-        }
-      }
-
-      if (event.type === "item.completed") {
-        const item = (event.data as any)?.item;
-        if (item?.role === "assistant") {
-          isThinking = false;
-          process.stdout.write("\n");
-          turnResolve?.();
-          turnResolve = null;
-        }
-      }
-
-      if (event.type === "permission.requested") {
-        const data = event.data as PermissionEventData;
-        if (isThinking && !hasStartedOutput) {
-          process.stdout.write("\r\x1b[K");
-        }
-        console.log(`[Auto-approved] ${data.action}`);
-        await client.replyPermission(sessionId, data.permission_id, { reply: "once" });
-      }
-
-      if (event.type === "question.requested") {
-        const data = event.data as QuestionEventData;
-        if (isThinking && !hasStartedOutput) {
-          process.stdout.write("\r\x1b[K");
-        }
-        console.log(`[Question rejected] ${data.prompt}`);
-        await client.rejectQuestion(sessionId, data.question_id);
-      }
-
-      if (event.type === "error") {
-        const data = event.data as any;
-        console.error(`\nError: ${data?.message || JSON.stringify(data)}`);
-      }
-
-      if (event.type === "session.ended") {
-        const data = event.data as any;
-        const reason = data?.reason || "unknown";
-        if (reason === "error") {
-          console.error(`\nAgent exited with error: ${data?.message || ""}`);
-          if (data?.exit_code !== undefined) {
-            console.error(`  Exit code: ${data.exit_code}`);
-          }
-        } else {
-          console.log(`Agent session ${reason}`);
-        }
-        sessionEnded = true;
-        turnResolve?.();
-        turnResolve = null;
-      }
-    }
-  };
-
-  processEvents().catch((err) => {
-    if (!sessionEnded) {
-      console.error("Event stream error:", err instanceof Error ? err.message : err);
-    }
-  });
-
-  while (true) {
-    const line = await rl.question("> ");
-    if (!line.trim()) continue;
-
-    const turnComplete = new Promise<void>((resolve) => {
-      turnResolve = resolve;
-    });
-
-    try {
-      await client.postMessage(sessionId, { message: line.trim() });
-      await turnComplete;
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : error);
-      turnResolve = null;
-    }
-  }
-}

@@ -1,5 +1,6 @@
 import Docker from "dockerode";
-import { runPrompt, waitForHealth } from "@sandbox-agent/example-shared";
+import { SandboxAgent } from "sandbox-agent";
+import { detectAgent, buildInspectorUrl, generateSessionId, waitForHealth } from "@sandbox-agent/example-shared";
 
 const IMAGE = "alpine:latest";
 const PORT = 3000;
@@ -44,13 +45,19 @@ await container.start();
 const baseUrl = `http://127.0.0.1:${PORT}`;
 await waitForHealth({ baseUrl });
 
+const client = await SandboxAgent.connect({ baseUrl });
+const sessionId = generateSessionId();
+await client.createSession(sessionId, { agent: detectAgent() });
+
+console.log(`  UI: ${buildInspectorUrl({ baseUrl, sessionId })}`);
+console.log("  Press Ctrl+C to stop.");
+
+const keepAlive = setInterval(() => {}, 60_000);
 const cleanup = async () => {
+  clearInterval(keepAlive);
   try { await container.stop({ t: 5 }); } catch {}
   try { await container.remove({ force: true }); } catch {}
   process.exit(0);
 };
 process.once("SIGINT", cleanup);
 process.once("SIGTERM", cleanup);
-
-await runPrompt(baseUrl);
-await cleanup();

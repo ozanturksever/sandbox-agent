@@ -226,6 +226,97 @@ Claude output is converted via `convertClaudeOutput()`:
 3. Parse with `ClaudeCliResponseSchema` as fallback
 4. Extract `structured_output` as metadata if present
 
+## Model Discovery
+
+Claude Code's `/models` slash command uses the **standard Anthropic Models API**.
+
+### API Endpoint
+
+```
+GET https://api.anthropic.com/v1/models?beta=true
+```
+
+Found by reverse engineering the CLI bundle at `node_modules/@anthropic-ai/claude-code/cli.js`.
+
+### API Client
+
+The CLI contains an internal `Models` class with two methods:
+
+```javascript
+// List all models
+GET /v1/models?beta=true
+
+// Retrieve a single model
+GET /v1/models/${modelId}?beta=true
+```
+
+Uses `this._client.getAPIList()` which handles paginated responses. The `?beta=true` query parameter is hardcoded to include beta/preview models.
+
+### Authentication
+
+Uses the same Anthropic API key / OAuth credentials that Claude Code uses for conversations. The request goes to the standard Anthropic API base URL.
+
+### Hardcoded Context Window Data
+
+The CLI also contains hardcoded output token limits for certain models (used as fallback):
+
+```javascript
+{
+  "claude-opus-4-20250514": 8192,
+  "claude-opus-4-0": 8192,
+  "claude-opus-4-1-20250805": 8192,
+  // ... more entries
+}
+```
+
+### How to Replicate
+
+Call the Anthropic API directly — no need to go through the Claude CLI:
+
+```
+GET https://api.anthropic.com/v1/models?beta=true
+x-api-key: <ANTHROPIC_API_KEY>
+anthropic-version: 2023-06-01
+```
+
+## Command Execution & Process Management
+
+### Agent Tool Execution
+
+The agent executes commands via the `Bash` tool. This is synchronous - the agent blocks until the command exits. Tool schema:
+
+```json
+{
+  "command": "string",
+  "timeout": "number",
+  "workingDirectory": "string"
+}
+```
+
+There is no background process support. If the agent needs a long-running process (e.g., dev server), it uses shell backgrounding (`&`) within a single `Bash` tool call.
+
+### User-Initiated Command Execution (`!` prefix)
+
+Claude Code's TUI supports `!command` syntax where the user types `!npm test` to run a command directly. The output is injected into the conversation as a user message so the agent can see it on the next turn.
+
+**This is a client-side TUI feature only.** It is not exposed in the API schema or streaming protocol. The CLI runs the command locally and stuffs the output into the next user message. There is no protocol-level concept of "user ran a command" vs "agent ran a command."
+
+### No External Command Injection API
+
+External clients (SDKs, frontends) cannot programmatically inject command results into Claude's conversation context. The only way to provide command output to the agent is:
+- Include it in the user prompt text
+- Use the `!` prefix in the interactive TUI
+
+### Comparison
+
+| Capability | Supported? | Notes |
+|-----------|-----------|-------|
+| Agent runs commands | Yes (`Bash` tool) | Synchronous, blocks agent turn |
+| User runs commands → agent sees output | Yes (`!cmd` in TUI) | Client-side only, not in protocol |
+| External API for command injection | No | |
+| Background process management | No | Shell `&` only |
+| PTY / interactive terminal | No | |
+
 ## Notes
 
 - Claude CLI manages its own OAuth refresh internally

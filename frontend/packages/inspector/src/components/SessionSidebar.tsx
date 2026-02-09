@@ -1,6 +1,17 @@
 import { Plus, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { AgentInfo, SessionInfo } from "sandbox-agent";
+import type { AgentInfo, AgentModelInfo, AgentModeInfo, SessionInfo, SkillSource } from "sandbox-agent";
+import type { McpServerEntry } from "../App";
+import SessionCreateMenu, { type SessionConfig } from "./SessionCreateMenu";
+
+const agentLabels: Record<string, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+  amp: "Amp",
+  codebuff: "Codebuff",
+  mock: "Mock"
+};
 
 const SessionSidebar = ({
   sessions,
@@ -8,22 +19,48 @@ const SessionSidebar = ({
   onSelectSession,
   onRefresh,
   onCreateSession,
+  onSelectAgent,
   agents,
   agentsLoading,
   agentsError,
   sessionsLoading,
-  sessionsError
+  sessionsError,
+  modesByAgent,
+  modelsByAgent,
+  defaultModelByAgent,
+  modesLoadingByAgent,
+  modelsLoadingByAgent,
+  modesErrorByAgent,
+  modelsErrorByAgent,
+  mcpServers,
+  onMcpServersChange,
+  mcpConfigError,
+  skillSources,
+  onSkillSourcesChange
 }: {
   sessions: SessionInfo[];
   selectedSessionId: string;
   onSelectSession: (session: SessionInfo) => void;
   onRefresh: () => void;
-  onCreateSession: (agentId: string) => void;
+  onCreateSession: (agentId: string, config: SessionConfig) => void;
+  onSelectAgent: (agentId: string) => void;
   agents: AgentInfo[];
   agentsLoading: boolean;
   agentsError: string | null;
   sessionsLoading: boolean;
   sessionsError: string | null;
+  modesByAgent: Record<string, AgentModeInfo[]>;
+  modelsByAgent: Record<string, AgentModelInfo[]>;
+  defaultModelByAgent: Record<string, string>;
+  modesLoadingByAgent: Record<string, boolean>;
+  modelsLoadingByAgent: Record<string, boolean>;
+  modesErrorByAgent: Record<string, string | null>;
+  modelsErrorByAgent: Record<string, string | null>;
+  mcpServers: McpServerEntry[];
+  onMcpServersChange: (servers: McpServerEntry[]) => void;
+  mcpConfigError: string | null;
+  skillSources: SkillSource[];
+  onSkillSourcesChange: (sources: SkillSource[]) => void;
 }) => {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -40,14 +77,6 @@ const SessionSidebar = ({
     return () => document.removeEventListener("mousedown", handler);
   }, [showMenu]);
 
-  const agentLabels: Record<string, string> = {
-    claude: "Claude Code",
-    codex: "Codex",
-    opencode: "OpenCode",
-    amp: "Amp",
-    codebuff: "Codebuff",
-    mock: "Mock"
-  };
 
   return (
     <div className="session-sidebar">
@@ -65,32 +94,27 @@ const SessionSidebar = ({
             >
               <Plus size={14} />
             </button>
-            {showMenu && (
-              <div className="sidebar-add-menu">
-                {agentsLoading && <div className="sidebar-add-status">Loading agents...</div>}
-                {agentsError && <div className="sidebar-add-status error">{agentsError}</div>}
-                {!agentsLoading && !agentsError && agents.length === 0 && (
-                  <div className="sidebar-add-status">No agents available.</div>
-                )}
-                {!agentsLoading && !agentsError &&
-                  agents.map((agent) => (
-                    <button
-                      key={agent.id}
-                      className="sidebar-add-option"
-                      onClick={() => {
-                        onCreateSession(agent.id);
-                        setShowMenu(false);
-                      }}
-                    >
-                      <div className="agent-option-left">
-                        <span className="agent-option-name">{agentLabels[agent.id] ?? agent.id}</span>
-                        {agent.version && <span className="agent-badge version">v{agent.version}</span>}
-                      </div>
-                      {agent.installed && <span className="agent-badge installed">Installed</span>}
-                    </button>
-                  ))}
-              </div>
-            )}
+            <SessionCreateMenu
+              agents={agents}
+              agentsLoading={agentsLoading}
+              agentsError={agentsError}
+              modesByAgent={modesByAgent}
+              modelsByAgent={modelsByAgent}
+              defaultModelByAgent={defaultModelByAgent}
+              modesLoadingByAgent={modesLoadingByAgent}
+              modelsLoadingByAgent={modelsLoadingByAgent}
+              modesErrorByAgent={modesErrorByAgent}
+              modelsErrorByAgent={modelsErrorByAgent}
+              mcpServers={mcpServers}
+              onMcpServersChange={onMcpServersChange}
+              mcpConfigError={mcpConfigError}
+              skillSources={skillSources}
+              onSkillSourcesChange={onSkillSourcesChange}
+              onSelectAgent={onSelectAgent}
+              onCreateSession={onCreateSession}
+              open={showMenu}
+              onClose={() => setShowMenu(false)}
+            />
           </div>
         </div>
       </div>

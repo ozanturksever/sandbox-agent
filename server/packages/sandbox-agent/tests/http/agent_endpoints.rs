@@ -162,4 +162,174 @@ async fn agent_endpoints_snapshots() {
             insta::assert_yaml_snapshot!(normalize_agent_modes(&modes));
         });
     }
+
+    for config in &configs {
+        let _guard = apply_credentials(&config.credentials);
+        let (status, models) = send_json(
+            &app.app,
+            Method::GET,
+            &format!("/v1/agents/{}/models", config.agent.as_str()),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "agent models");
+        let model_count = models
+            .get("models")
+            .and_then(|value| value.as_array())
+            .map(|models| models.len())
+            .unwrap_or_default();
+        assert!(model_count > 0, "agent models should not be empty");
+        insta::with_settings!({
+            snapshot_suffix => snapshot_name("agent_models", Some(config.agent)),
+        }, {
+            insta::assert_yaml_snapshot!(normalize_agent_models(&models, config.agent));
+        });
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_session_with_skill_sources() {
+    let app = TestApp::new();
+
+    // Create a temp skill directory with SKILL.md
+    let skill_dir = tempfile::tempdir().expect("create skill dir");
+    let skill_path = skill_dir.path().join("my-test-skill");
+    std::fs::create_dir_all(&skill_path).expect("create skill subdir");
+    std::fs::write(skill_path.join("SKILL.md"), "# Test Skill\nA test skill.")
+        .expect("write SKILL.md");
+
+    // Create session with local skill source
+    let (status, payload) = send_json(
+        &app.app,
+        Method::POST,
+        "/v1/sessions/skill-test-session",
+        Some(json!({
+            "agent": "mock",
+            "skills": {
+                "sources": [
+                    {
+                        "type": "local",
+                        "source": skill_dir.path().to_string_lossy()
+                    }
+                ]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "create session with skills: {payload}"
+    );
+    assert!(
+        payload
+            .get("healthy")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "session should be healthy"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_session_with_skill_sources_filter() {
+    let app = TestApp::new();
+
+    // Create a temp directory with two skills
+    let skill_dir = tempfile::tempdir().expect("create skill dir");
+    let wanted = skill_dir.path().join("wanted-skill");
+    let unwanted = skill_dir.path().join("unwanted-skill");
+    std::fs::create_dir_all(&wanted).expect("create wanted dir");
+    std::fs::create_dir_all(&unwanted).expect("create unwanted dir");
+    std::fs::write(wanted.join("SKILL.md"), "# Wanted").expect("write wanted SKILL.md");
+    std::fs::write(unwanted.join("SKILL.md"), "# Unwanted").expect("write unwanted SKILL.md");
+
+    // Create session with filter
+    let (status, payload) = send_json(
+        &app.app,
+        Method::POST,
+        "/v1/sessions/skill-filter-session",
+        Some(json!({
+            "agent": "mock",
+            "skills": {
+                "sources": [
+                    {
+                        "type": "local",
+                        "source": skill_dir.path().to_string_lossy(),
+                        "skills": ["wanted-skill"]
+                    }
+                ]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "create session with skill filter: {payload}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_session_with_invalid_skill_source() {
+    let app = TestApp::new();
+
+    // Use a non-existent path
+    let (status, _payload) = send_json(
+        &app.app,
+        Method::POST,
+        "/v1/sessions/skill-invalid-session",
+        Some(json!({
+            "agent": "mock",
+            "skills": {
+                "sources": [
+                    {
+                        "type": "local",
+                        "source": "/nonexistent/path/to/skills"
+                    }
+                ]
+            }
+        })),
+    )
+    .await;
+    // Should fail with a 4xx or 5xx error
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "session with invalid skill source should fail"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_session_with_skill_filter_no_match() {
+    let app = TestApp::new();
+
+    let skill_dir = tempfile::tempdir().expect("create skill dir");
+    let skill_path = skill_dir.path().join("alpha");
+    std::fs::create_dir_all(&skill_path).expect("create alpha dir");
+    std::fs::write(skill_path.join("SKILL.md"), "# Alpha").expect("write SKILL.md");
+
+    // Filter for a skill that doesn't exist
+    let (status, _payload) = send_json(
+        &app.app,
+        Method::POST,
+        "/v1/sessions/skill-nomatch-session",
+        Some(json!({
+            "agent": "mock",
+            "skills": {
+                "sources": [
+                    {
+                        "type": "local",
+                        "source": skill_dir.path().to_string_lossy(),
+                        "skills": ["nonexistent"]
+                    }
+                ]
+            }
+        })),
+    )
+    .await;
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "session with no matching skills should fail"
+    );
 }

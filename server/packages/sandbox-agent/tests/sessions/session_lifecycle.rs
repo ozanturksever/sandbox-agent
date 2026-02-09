@@ -83,6 +83,46 @@ async fn http_events_snapshots() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accept_edits_noop_for_non_claude() {
+    let app = TestApp::new();
+    let session_id = "accept-edits-noop";
+
+    let (status, _) = send_json(
+        &app.app,
+        Method::POST,
+        &format!("/v1/sessions/{session_id}"),
+        Some(json!({
+            "agent": AgentId::Mock.as_str(),
+            "permissionMode": "acceptEdits"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create session with acceptEdits");
+
+    let (status, sessions) = send_json(&app.app, Method::GET, "/v1/sessions", None).await;
+    assert_eq!(status, StatusCode::OK, "list sessions");
+
+    let sessions = sessions
+        .get("sessions")
+        .and_then(Value::as_array)
+        .expect("sessions list");
+    let session = sessions
+        .iter()
+        .find(|entry| {
+            entry
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id == session_id)
+        })
+        .expect("created session");
+    let permission_mode = session
+        .get("permissionMode")
+        .and_then(Value::as_str)
+        .expect("permissionMode");
+    assert_eq!(permission_mode, "default");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sse_events_snapshots() {
     let configs = test_agents_from_env().expect("configure SANDBOX_TEST_AGENTS or install agents");
 
@@ -125,6 +165,11 @@ async fn turn_stream_route() {
     let configs = test_agents_from_env().expect("configure SANDBOX_TEST_AGENTS or install agents");
 
     for config in &configs {
+        // OpenCode's embedded bun can hang while installing plugins, which blocks turn streaming.
+        // OpenCode turn behavior is covered by the dedicated opencode-compat suite.
+        if config.agent == AgentId::Opencode {
+            continue;
+        }
         let app = TestApp::new();
         let capabilities = fetch_capabilities(&app.app).await;
         let caps = capabilities
@@ -135,6 +180,34 @@ async fn turn_stream_route() {
         }
         run_turn_stream_check(&app.app, config).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_stream_emits_turn_lifecycle_for_mock() {
+    let app = TestApp::new();
+    install_agent(&app.app, AgentId::Mock).await;
+
+    let session_id = "turn-lifecycle-mock";
+    create_session(
+        &app.app,
+        AgentId::Mock,
+        session_id,
+        test_permission_mode(AgentId::Mock),
+    )
+    .await;
+
+    let events = read_turn_stream_events(&app.app, session_id, Duration::from_secs(30)).await;
+    let started_count = events
+        .iter()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("turn.started"))
+        .count();
+    let ended_count = events
+        .iter()
+        .filter(|event| event.get("type").and_then(Value::as_str) == Some("turn.ended"))
+        .count();
+
+    assert_eq!(started_count, 1, "expected exactly one turn.started event");
+    assert_eq!(ended_count, 1, "expected exactly one turn.ended event");
 }
 
 async fn run_concurrency_snapshot(app: &Router, config: &TestAgentConfig) {

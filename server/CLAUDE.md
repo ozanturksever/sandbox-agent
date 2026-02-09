@@ -2,6 +2,10 @@
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed architecture documentation covering the daemon, agent schema pipeline, session management, agent execution patterns, and SDK modes.
 
+## Skill Source Installation
+
+Skills are installed via `skills.sources` in the session create request. The [vercel-labs/skills](https://github.com/vercel-labs/skills) repo (`~/misc/skills`) provides reference for skill installation patterns and source parsing logic. The server handles fetching GitHub repos (via zip download) and git repos (via clone) to `~/.sandbox-agent/skills-cache/`, discovering `SKILL.md` files, and symlinking into agent skill roots.
+
 # Server Testing
 
 ## Test placement

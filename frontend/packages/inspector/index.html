@@ -336,6 +336,12 @@
         color: var(--danger);
       }
 
+      .banner.config-note {
+        background: rgba(255, 159, 10, 0.12);
+        border-left: 3px solid var(--warning);
+        color: var(--warning);
+      }
+
       .banner.success {
         background: rgba(48, 209, 88, 0.1);
         border-left: 3px solid var(--success);
@@ -471,11 +477,12 @@
         position: relative;
       }
 
-      .sidebar-add-menu {
+      .sidebar-add-menu,
+      .session-create-menu {
         position: absolute;
         top: 36px;
         left: 0;
-        min-width: 200px;
+        min-width: 220px;
         background: var(--surface);
         border: 1px solid var(--border-2);
         border-radius: 8px;
@@ -485,6 +492,405 @@
         flex-direction: column;
         gap: 4px;
         z-index: 60;
+      }
+
+      .session-create-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 6px 4px;
+        margin-bottom: 4px;
+      }
+
+      .session-create-back {
+        width: 24px;
+        height: 24px;
+        background: transparent;
+        border: 1px solid var(--border-2);
+        border-radius: 4px;
+        color: var(--muted);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all var(--transition);
+        flex-shrink: 0;
+      }
+
+      .session-create-back:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .session-create-agent-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .session-create-form {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        padding: 4px 2px;
+      }
+
+      .session-create-form .setup-field {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        height: 28px;
+      }
+
+      .session-create-form .setup-label {
+        width: 72px;
+        flex-shrink: 0;
+        text-align: right;
+      }
+
+      .session-create-form .setup-select,
+      .session-create-form .setup-input {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .session-create-section {
+        overflow: hidden;
+      }
+
+      .session-create-section-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        height: 28px;
+        padding: 0;
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 11px;
+        cursor: pointer;
+        transition: color var(--transition);
+      }
+
+      .session-create-section-toggle:hover {
+        color: var(--text);
+      }
+
+      .session-create-section-toggle .setup-label {
+        width: 72px;
+        flex-shrink: 0;
+        text-align: right;
+      }
+
+      .session-create-section-count {
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--muted);
+      }
+
+      .session-create-section-arrow {
+        margin-left: auto;
+        color: var(--muted-2);
+        flex-shrink: 0;
+      }
+
+      .session-create-section-body {
+        margin: 4px 0 6px;
+        padding: 8px;
+        border: 1px solid var(--border-2);
+        border-radius: 4px;
+        background: var(--surface-2);
+      }
+
+      .session-create-textarea {
+        width: 100%;
+        background: var(--surface-2);
+        border: 1px solid var(--border-2);
+        border-radius: 4px;
+        padding: 6px 8px;
+        font-size: 10px;
+        color: var(--text);
+        outline: none;
+        resize: vertical;
+        min-height: 60px;
+        font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, monospace;
+        transition: border-color var(--transition);
+      }
+
+      .session-create-textarea:focus {
+        border-color: var(--accent);
+      }
+
+      .session-create-textarea::placeholder {
+        color: var(--muted-2);
+      }
+
+      .session-create-inline-error {
+        font-size: 10px;
+        color: var(--danger);
+        margin-top: 4px;
+        line-height: 1.4;
+      }
+
+      .session-create-skill-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin-bottom: 4px;
+      }
+
+      .session-create-skill-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 4px 3px 8px;
+        background: var(--surface-2);
+        border: 1px solid var(--border-2);
+        border-radius: 4px;
+      }
+
+      .session-create-skill-path {
+        flex: 1;
+        min-width: 0;
+        font-size: 10px;
+        color: var(--text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .session-create-skill-remove {
+        width: 18px;
+        height: 18px;
+        background: transparent;
+        border: none;
+        border-radius: 3px;
+        color: var(--muted);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: all var(--transition);
+      }
+
+      .session-create-skill-remove:hover {
+        color: var(--danger);
+        background: rgba(255, 59, 48, 0.12);
+      }
+
+      .session-create-skill-add-row {
+        display: flex;
+      }
+
+      .session-create-skill-input {
+        width: 100%;
+        background: var(--surface-2);
+        border: 1px solid var(--accent);
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 10px;
+        color: var(--text);
+        outline: none;
+        font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, monospace;
+      }
+
+      .session-create-skill-input::placeholder {
+        color: var(--muted-2);
+      }
+
+      .session-create-skill-type-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 9px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        background: rgba(255, 79, 0, 0.15);
+        color: var(--accent);
+        flex-shrink: 0;
+      }
+
+      .session-create-skill-type-row {
+        display: flex;
+        gap: 4px;
+      }
+
+      .session-create-skill-type-select {
+        width: 80px;
+        flex-shrink: 0;
+        background: var(--surface-2);
+        border: 1px solid var(--accent);
+        border-radius: 4px;
+        padding: 4px 6px;
+        font-size: 10px;
+        color: var(--text);
+        outline: none;
+        cursor: pointer;
+      }
+
+      .session-create-mcp-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin-bottom: 4px;
+      }
+
+      .session-create-mcp-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 4px 3px 8px;
+        background: var(--surface-2);
+        border: 1px solid var(--border-2);
+        border-radius: 4px;
+      }
+
+      .session-create-mcp-info {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .session-create-mcp-name {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text);
+        white-space: nowrap;
+      }
+
+      .session-create-mcp-type {
+        font-size: 9px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        color: var(--muted);
+        background: var(--surface);
+        padding: 1px 4px;
+        border-radius: 3px;
+        white-space: nowrap;
+      }
+
+      .session-create-mcp-summary {
+        font-size: 10px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+
+      .session-create-mcp-actions {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        flex-shrink: 0;
+      }
+
+      .session-create-mcp-edit {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .session-create-mcp-name-input {
+        width: 100%;
+        background: var(--surface-2);
+        border: 1px solid var(--accent);
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 11px;
+        color: var(--text);
+        outline: none;
+      }
+
+      .session-create-mcp-name-input:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .session-create-mcp-name-input::placeholder {
+        color: var(--muted-2);
+      }
+
+      .session-create-mcp-edit-actions {
+        display: flex;
+        gap: 4px;
+      }
+
+      .session-create-mcp-save,
+      .session-create-mcp-cancel {
+        flex: 1;
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: none;
+        font-size: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background var(--transition);
+      }
+
+      .session-create-mcp-save {
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .session-create-mcp-save:hover {
+        background: var(--accent-hover);
+      }
+
+      .session-create-mcp-cancel {
+        background: var(--border-2);
+        color: var(--text-secondary);
+      }
+
+      .session-create-mcp-cancel:hover {
+        background: var(--muted-2);
+      }
+
+      .session-create-add-btn {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        width: 100%;
+        padding: 4px 8px;
+        background: transparent;
+        border: 1px dashed var(--border-2);
+        border-radius: 4px;
+        color: var(--muted);
+        font-size: 10px;
+        cursor: pointer;
+        transition: all var(--transition);
+      }
+
+      .session-create-add-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .session-create-actions {
+        padding: 4px 2px 2px;
+        margin-top: 4px;
+      }
+
+      .session-create-actions .button.primary {
+        width: 100%;
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+
+      /* Empty state variant of session-create-menu */
+      .empty-state-menu-wrapper .session-create-menu {
+        top: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        margin-top: 8px;
       }
 
       .sidebar-add-option {
@@ -515,12 +921,40 @@
       .agent-option-left {
         display: flex;
         flex-direction: column;
+        align-items: flex-start;
         gap: 2px;
         min-width: 0;
       }
 
       .agent-option-name {
         white-space: nowrap;
+        min-width: 0;
+      }
+
+      .agent-option-version {
+        font-size: 10px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .sidebar-add-option:hover .agent-option-version {
+        color: rgba(255, 255, 255, 0.6);
+      }
+
+      .agent-option-badges {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+
+      .agent-option-arrow {
+        color: var(--muted-2);
+        transition: color var(--transition);
+      }
+
+      .sidebar-add-option:hover .agent-option-arrow {
+        color: rgba(255, 255, 255, 0.6);
       }
 
       .agent-badge {
@@ -535,9 +969,6 @@
         flex-shrink: 0;
       }
 
-      .agent-badge.version {
-        color: var(--muted);
-      }
 
       .sidebar-add-status {
         padding: 6px 8px;
@@ -1043,6 +1474,36 @@
         height: 16px;
       }
 
+      /* Session Config Bar */
+      .session-config-bar {
+        display: flex;
+        align-items: flex-start;
+        gap: 20px;
+        padding: 10px 16px 12px;
+        border-top: 1px solid var(--border);
+        flex-shrink: 0;
+        flex-wrap: wrap;
+      }
+
+      .session-config-field {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .session-config-label {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--muted);
+      }
+
+      .session-config-value {
+        font-size: 12px;
+        color: #8e8e93;
+      }
+
       /* Setup Row */
       .setup-row {
         display: flex;
@@ -1207,6 +1668,29 @@
         color: #fff;
       }
 
+      .setup-config-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .setup-config-btn {
+        border: 1px solid var(--border-2);
+        border-radius: 4px;
+        background: var(--surface);
+        color: var(--text-secondary);
+      }
+
+      .setup-config-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .setup-config-btn.error {
+        color: var(--danger);
+        border-color: rgba(255, 59, 48, 0.4);
+      }
+
       .setup-version {
         font-size: 10px;
         color: var(--muted);
@@ -1311,12 +1795,31 @@
         margin-bottom: 0;
       }
 
+      .config-textarea {
+        min-height: 130px;
+      }
+
+      .config-inline-error {
+        margin-top: 8px;
+        margin-bottom: 0;
+      }
+
       .card-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
         margin-bottom: 8px;
+      }
+
+      .card-header-pills {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .spinner-icon {
+        animation: spin 0.8s linear infinite;
       }
 
       .card-title {

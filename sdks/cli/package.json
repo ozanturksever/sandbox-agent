@@ -1,6 +1,6 @@
 {
   "name": "@sandbox-agent/cli",
-  "version": "0.1.6-rc.1",
+  "version": "0.1.11",
   "description": "CLI for sandbox-agent - run AI coding agents in sandboxes",
   "license": "Apache-2.0",
   "repository": {
@@ -23,6 +23,7 @@
     "@sandbox-agent/cli-darwin-arm64": "workspace:*",
     "@sandbox-agent/cli-darwin-x64": "workspace:*",
     "@sandbox-agent/cli-linux-x64": "workspace:*",
+    "@sandbox-agent/cli-linux-arm64": "workspace:*",
     "@sandbox-agent/cli-win32-x64": "workspace:*"
   },
   "files": [

@@ -1,7 +1,7 @@
 {
   "name": "sandbox-agent",
-  "version": "0.1.6-rc.1",
-  "description": "Universal API for automatic coding agents in sandboxes. Supprots Claude Code, Codex, OpenCode, and Amp.",
+  "version": "0.1.11",
+  "description": "Universal API for automatic coding agents in sandboxes. Supports Claude Code, Codex, OpenCode, and Amp.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -43,6 +43,6 @@
     "vitest": "^3.0.0"
   },
   "optionalDependencies": {
-    "@sandbox-agent/cli": "0.1.0"
+    "@sandbox-agent/cli": "workspace:*"
   }
 }

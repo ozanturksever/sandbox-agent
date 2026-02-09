@@ -175,9 +175,7 @@ impl AgentManager {
         if agent == AgentId::Mock {
             return true;
         }
-        self.binary_path(agent).exists()
-            || find_in_path(agent.binary_name()).is_some()
-            || default_install_dir().join(agent.binary_name()).exists()
+        self.binary_path(agent).exists() || find_in_path(agent.binary_name()).is_some()
     }
 
     pub fn binary_path(&self, agent: AgentId) -> PathBuf {
@@ -665,10 +663,6 @@ impl AgentManager {
         if let Some(path) = find_in_path(agent.binary_name()) {
             return Ok(path);
         }
-        let fallback = default_install_dir().join(agent.binary_name());
-        if fallback.exists() {
-            return Ok(fallback);
-        }
         Err(AgentError::BinaryNotFound { agent })
     }
 }
@@ -773,7 +767,13 @@ fn parse_version_output(output: &std::process::Output) -> Option<String> {
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .map(|line| line.to_string())
+        .map(|line| {
+            // Strip trailing metadata like " (released ...)" from version strings
+            match line.find(" (") {
+                Some(pos) => line[..pos].to_string(),
+                None => line.to_string(),
+            }
+        })
 }
 
 fn parse_jsonl(text: &str) -> Vec<Value> {
@@ -1215,12 +1215,6 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
         }
     }
     None
-}
-
-fn default_install_dir() -> PathBuf {
-    dirs::data_dir()
-        .map(|dir| dir.join("sandbox-agent").join("bin"))
-        .unwrap_or_else(|| PathBuf::from(".").join(".sandbox-agent").join("bin"))
 }
 
 fn download_bytes(url: &Url) -> Result<Vec<u8>, AgentError> {

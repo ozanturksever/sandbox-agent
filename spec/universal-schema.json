@@ -370,8 +370,9 @@
       "type": "string",
       "enum": [
         "requested",
-        "approved",
-        "denied"
+        "accept",
+        "accept_for_session",
+        "reject"
       ]
     },
     "QuestionEventData": {
@@ -518,8 +519,36 @@
         "daemon"
       ]
     },
+    "TurnEventData": {
+      "type": "object",
+      "required": [
+        "phase"
+      ],
+      "properties": {
+        "metadata": true,
+        "phase": {
+          "$ref": "#/definitions/TurnPhase"
+        },
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "TurnPhase": {
+      "type": "string",
+      "enum": [
+        "started",
+        "ended"
+      ]
+    },
     "UniversalEventData": {
       "anyOf": [
+        {
+          "$ref": "#/definitions/TurnEventData"
+        },
         {
           "$ref": "#/definitions/SessionStartedData"
         },
@@ -551,6 +580,8 @@
       "enum": [
         "session.started",
         "session.ended",
+        "turn.started",
+        "turn.ended",
         "item.started",
         "item.delta",
         "item.completed",

@@ -1,0 +1,22 @@
+{
+  "name": "@sandbox-agent/example-mcp-custom-tool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:mcp": "esbuild src/mcp-server.ts --bundle --format=cjs --platform=node --target=node18 --minify --outfile=dist/mcp-server.cjs",
+    "start": "pnpm build:mcp && tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "@sandbox-agent/example-shared": "workspace:*",
+    "sandbox-agent": "workspace:*",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "esbuild": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}

@@ -1,5 +1,6 @@
 ---
 source: server/packages/sandbox-agent/tests/sessions/../common/http.rs
+assertion_line: 1001
 expression: normalized
 ---
 - metadata: true
@@ -14,19 +15,13 @@ expression: normalized
     status: in_progress
   seq: 2
   type: item.started
-- delta:
-    delta: "<redacted>"
-    item_id: "<redacted>"
-    native_item_id: "<redacted>"
-  seq: 3
-  type: item.delta
 - item:
     content_types:
       - text
     kind: message
     role: user
     status: completed
-  seq: 4
+  seq: 3
   type: item.completed
 - item:
     content_types:
@@ -34,13 +29,13 @@ expression: normalized
     kind: message
     role: assistant
     status: in_progress
-  seq: 5
+  seq: 4
   type: item.started
 - delta:
     delta: "<redacted>"
     item_id: "<redacted>"
     native_item_id: "<redacted>"
-  seq: 6
+  seq: 5
   type: item.delta
 - item:
     content_types:
@@ -48,5 +43,5 @@ expression: normalized
     kind: message
     role: assistant
     status: completed
-  seq: 7
+  seq: 6
   type: item.completed

@@ -40,6 +40,10 @@ pub enum UniversalEventType {
     SessionStarted,
     #[serde(rename = "session.ended")]
     SessionEnded,
+    #[serde(rename = "turn.started")]
+    TurnStarted,
+    #[serde(rename = "turn.ended")]
+    TurnEnded,
     #[serde(rename = "item.started")]
     ItemStarted,
     #[serde(rename = "item.delta")]
@@ -63,6 +67,7 @@ pub enum UniversalEventType {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
 #[serde(untagged)]
 pub enum UniversalEventData {
+    Turn(TurnEventData),
     SessionStarted(SessionStartedData),
     SessionEnded(SessionEndedData),
     Item(ItemEventData),
@@ -91,6 +96,22 @@ pub struct SessionEndedData {
     /// Agent stderr output when reason is Error
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stderr: Option<StderrOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
+pub struct TurnEventData {
+    pub phase: TurnPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnPhase {
+    Started,
+    Ended,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
@@ -161,8 +182,9 @@ pub struct PermissionEventData {
 #[serde(rename_all = "snake_case")]
 pub enum PermissionStatus {
     Requested,
-    Approved,
-    Denied,
+    Accept,
+    AcceptForSession,
+    Reject,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToSchema)]
@@ -315,6 +337,28 @@ impl EventConversion {
         self.source = source;
         self
     }
+}
+
+pub fn turn_started_event(turn_id: Option<String>, metadata: Option<Value>) -> EventConversion {
+    EventConversion::new(
+        UniversalEventType::TurnStarted,
+        UniversalEventData::Turn(TurnEventData {
+            phase: TurnPhase::Started,
+            turn_id,
+            metadata,
+        }),
+    )
+}
+
+pub fn turn_ended_event(turn_id: Option<String>, metadata: Option<Value>) -> EventConversion {
+    EventConversion::new(
+        UniversalEventType::TurnEnded,
+        UniversalEventData::Turn(TurnEventData {
+            phase: TurnPhase::Ended,
+            turn_id,
+            metadata,
+        }),
+    )
 }
 
 pub fn item_from_text(role: ItemRole, text: String) -> UniversalItem {

@@ -12,23 +12,80 @@ const CRATES = [
 	"universal-agent-schema",
 	"agent-management",
 	"sandbox-agent",
+	"gigacode",
 ] as const;
 
 // NPM CLI packages
 const CLI_PACKAGES = [
 	"@sandbox-agent/cli",
 	"@sandbox-agent/cli-linux-x64",
+	"@sandbox-agent/cli-linux-arm64",
 	"@sandbox-agent/cli-win32-x64",
 	"@sandbox-agent/cli-darwin-x64",
 	"@sandbox-agent/cli-darwin-arm64",
+	"@sandbox-agent/gigacode",
+	"@sandbox-agent/gigacode-linux-x64",
+	"@sandbox-agent/gigacode-linux-arm64",
+	"@sandbox-agent/gigacode-win32-x64",
+	"@sandbox-agent/gigacode-darwin-x64",
+	"@sandbox-agent/gigacode-darwin-arm64",
 ] as const;
 
 // Mapping from npm package name to Rust target and binary extension
-const CLI_PLATFORM_MAP: Record<string, { target: string; binaryExt: string }> = {
-	"@sandbox-agent/cli-linux-x64": { target: "x86_64-unknown-linux-musl", binaryExt: "" },
-	"@sandbox-agent/cli-win32-x64": { target: "x86_64-pc-windows-gnu", binaryExt: ".exe" },
-	"@sandbox-agent/cli-darwin-x64": { target: "x86_64-apple-darwin", binaryExt: "" },
-	"@sandbox-agent/cli-darwin-arm64": { target: "aarch64-apple-darwin", binaryExt: "" },
+const CLI_PLATFORM_MAP: Record<
+	string,
+	{ target: string; binaryExt: string; binaryName: string }
+> = {
+	"@sandbox-agent/cli-linux-x64": {
+		target: "x86_64-unknown-linux-musl",
+		binaryExt: "",
+		binaryName: "sandbox-agent",
+	},
+	"@sandbox-agent/cli-linux-arm64": {
+		target: "aarch64-unknown-linux-musl",
+		binaryExt: "",
+		binaryName: "sandbox-agent",
+	},
+	"@sandbox-agent/cli-win32-x64": {
+		target: "x86_64-pc-windows-gnu",
+		binaryExt: ".exe",
+		binaryName: "sandbox-agent",
+	},
+	"@sandbox-agent/cli-darwin-x64": {
+		target: "x86_64-apple-darwin",
+		binaryExt: "",
+		binaryName: "sandbox-agent",
+	},
+	"@sandbox-agent/cli-darwin-arm64": {
+		target: "aarch64-apple-darwin",
+		binaryExt: "",
+		binaryName: "sandbox-agent",
+	},
+	"@sandbox-agent/gigacode-linux-x64": {
+		target: "x86_64-unknown-linux-musl",
+		binaryExt: "",
+		binaryName: "gigacode",
+	},
+	"@sandbox-agent/gigacode-linux-arm64": {
+		target: "aarch64-unknown-linux-musl",
+		binaryExt: "",
+		binaryName: "gigacode",
+	},
+	"@sandbox-agent/gigacode-win32-x64": {
+		target: "x86_64-pc-windows-gnu",
+		binaryExt: ".exe",
+		binaryName: "gigacode",
+	},
+	"@sandbox-agent/gigacode-darwin-x64": {
+		target: "x86_64-apple-darwin",
+		binaryExt: "",
+		binaryName: "gigacode",
+	},
+	"@sandbox-agent/gigacode-darwin-arm64": {
+		target: "aarch64-apple-darwin",
+		binaryExt: "",
+		binaryName: "gigacode",
+	},
 };
 
 async function npmVersionExists(
@@ -90,7 +147,9 @@ export async function publishCrates(opts: ReleaseOpts) {
 	console.log("==> Publishing crates to crates.io");
 
 	for (const crate of CRATES) {
-		const cratePath = join(opts.root, "server/packages", crate);
+		const cratePath = crate === "gigacode"
+			? join(opts.root, "gigacode")
+			: join(opts.root, "server/packages", crate);
 
 		// Read Cargo.toml to get the actual crate name
 		const cargoTomlPath = join(cratePath, "Cargo.toml");
@@ -244,33 +303,41 @@ export async function publishNpmCli(opts: ReleaseOpts) {
 		let packagePath: string;
 		if (packageName === "@sandbox-agent/cli") {
 			packagePath = join(opts.root, "sdks/cli");
-		} else {
+		} else if (packageName === "@sandbox-agent/gigacode") {
+			packagePath = join(opts.root, "sdks/gigacode");
+		} else if (packageName.startsWith("@sandbox-agent/cli-")) {
 			// Platform-specific packages: @sandbox-agent/cli-linux-x64 -> sdks/cli/platforms/linux-x64
 			const platform = packageName.replace("@sandbox-agent/cli-", "");
 			packagePath = join(opts.root, "sdks/cli/platforms", platform);
+		} else if (packageName.startsWith("@sandbox-agent/gigacode-")) {
+			// Platform-specific packages: @sandbox-agent/gigacode-linux-x64 -> sdks/gigacode/platforms/linux-x64
+			const platform = packageName.replace("@sandbox-agent/gigacode-", "");
+			packagePath = join(opts.root, "sdks/gigacode/platforms", platform);
+		} else {
+			throw new Error(`Unknown CLI package: ${packageName}`);
+		}
 
-			// Download binary from R2 for platform-specific packages
-			const platformInfo = CLI_PLATFORM_MAP[packageName];
-			if (platformInfo) {
-				const binDir = join(packagePath, "bin");
-				const binaryName = `sandbox-agent${platformInfo.binaryExt}`;
-				const localBinaryPath = join(binDir, binaryName);
-				const remoteBinaryPath = `${PREFIX}/${sourceCommit}/binaries/sandbox-agent-${platformInfo.target}${platformInfo.binaryExt}`;
+		// Download binary from R2 for platform-specific packages
+		const platformInfo = CLI_PLATFORM_MAP[packageName];
+		if (platformInfo) {
+			const binDir = join(packagePath, "bin");
+			const binaryName = `${platformInfo.binaryName}${platformInfo.binaryExt}`;
+			const localBinaryPath = join(binDir, binaryName);
+			const remoteBinaryPath = `${PREFIX}/${sourceCommit}/binaries/${platformInfo.binaryName}-${platformInfo.target}${platformInfo.binaryExt}`;
 
-				console.log(`==> Downloading binary for ${packageName}`);
-				console.log(`    From: ${remoteBinaryPath}`);
-				console.log(`    To: ${localBinaryPath}`);
+			console.log(`==> Downloading binary for ${packageName}`);
+			console.log(`    From: ${remoteBinaryPath}`);
+			console.log(`    To: ${localBinaryPath}`);
 
-				// Create bin directory
-				await fs.mkdir(binDir, { recursive: true });
+			// Create bin directory
+			await fs.mkdir(binDir, { recursive: true });
 
-				// Download binary
-				await downloadFromReleases(remoteBinaryPath, localBinaryPath);
+			// Download binary
+			await downloadFromReleases(remoteBinaryPath, localBinaryPath);
 
-				// Make binary executable (not needed on Windows)
-				if (!platformInfo.binaryExt) {
-					await fs.chmod(localBinaryPath, 0o755);
-				}
+			// Make binary executable (not needed on Windows)
+			if (!platformInfo.binaryExt) {
+				await fs.chmod(localBinaryPath, 0o755);
 			}
 		}
 

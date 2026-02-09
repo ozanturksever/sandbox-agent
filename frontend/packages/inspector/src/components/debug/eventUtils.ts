@@ -30,6 +30,10 @@ export const getEventIcon = (type: string) => {
       return PlayCircle;
     case "session.ended":
       return PauseCircle;
+    case "turn.started":
+      return PlayCircle;
+    case "turn.ended":
+      return PauseCircle;
     case "item.started":
       return MessageSquare;
     case "item.delta":

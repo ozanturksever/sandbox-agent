@@ -40,6 +40,14 @@ npm-debug.log*
 Cargo.lock
 **/*.rs.bk
 
+# Agent runtime directories
+.agents/
+.claude/
+.opencode/
+
+# Example temp files
+.tmp-upload/
+
 # CLI binaries (downloaded during npm publish)
 sdks/cli/platforms/*/bin/
 

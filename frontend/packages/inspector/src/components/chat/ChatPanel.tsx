@@ -1,16 +1,15 @@
-import { MessageSquare, PauseCircle, PlayCircle, Plus, Square, Terminal } from "lucide-react";
+import { MessageSquare, Plus, Square, Terminal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { AgentInfo, AgentModeInfo, PermissionEventData, QuestionEventData } from "sandbox-agent";
+import type { AgentInfo, AgentModelInfo, AgentModeInfo, PermissionEventData, QuestionEventData, SkillSource } from "sandbox-agent";
+import type { McpServerEntry } from "../../App";
 import ApprovalsTab from "../debug/ApprovalsTab";
+import SessionCreateMenu, { type SessionConfig } from "../SessionCreateMenu";
 import ChatInput from "./ChatInput";
 import ChatMessages from "./ChatMessages";
-import ChatSetup from "./ChatSetup";
 import type { TimelineEntry } from "./types";
 
 const ChatPanel = ({
   sessionId,
-  polling,
-  turnStreaming,
   transcriptEntries,
   sessionError,
   message,
@@ -18,28 +17,18 @@ const ChatPanel = ({
   onSendMessage,
   onKeyDown,
   onCreateSession,
+  onSelectAgent,
   agents,
   agentsLoading,
   agentsError,
   messagesEndRef,
-  agentId,
   agentLabel,
-  agentMode,
-  permissionMode,
-  model,
-  variant,
-  streamMode,
-  activeModes,
   currentAgentVersion,
-  hasSession,
-  modesLoading,
-  modesError,
-  onAgentModeChange,
-  onPermissionModeChange,
-  onModelChange,
-  onVariantChange,
-  onStreamModeChange,
-  onToggleStream,
+  sessionModel,
+  sessionVariant,
+  sessionPermissionMode,
+  sessionMcpServerCount,
+  sessionSkillSourceCount,
   onEndSession,
   eventError,
   questionRequests,
@@ -48,40 +37,40 @@ const ChatPanel = ({
   onSelectQuestionOption,
   onAnswerQuestion,
   onRejectQuestion,
-  onReplyPermission
+  onReplyPermission,
+  modesByAgent,
+  modelsByAgent,
+  defaultModelByAgent,
+  modesLoadingByAgent,
+  modelsLoadingByAgent,
+  modesErrorByAgent,
+  modelsErrorByAgent,
+  mcpServers,
+  onMcpServersChange,
+  mcpConfigError,
+  skillSources,
+  onSkillSourcesChange
 }: {
   sessionId: string;
-  polling: boolean;
-  turnStreaming: boolean;
   transcriptEntries: TimelineEntry[];
   sessionError: string | null;
   message: string;
   onMessageChange: (value: string) => void;
   onSendMessage: () => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  onCreateSession: (agentId: string) => void;
+  onCreateSession: (agentId: string, config: SessionConfig) => void;
+  onSelectAgent: (agentId: string) => void;
   agents: AgentInfo[];
   agentsLoading: boolean;
   agentsError: string | null;
   messagesEndRef: React.RefObject<HTMLDivElement>;
-  agentId: string;
   agentLabel: string;
-  agentMode: string;
-  permissionMode: string;
-  model: string;
-  variant: string;
-  streamMode: "poll" | "sse" | "turn";
-  activeModes: AgentModeInfo[];
   currentAgentVersion?: string | null;
-  hasSession: boolean;
-  modesLoading: boolean;
-  modesError: string | null;
-  onAgentModeChange: (value: string) => void;
-  onPermissionModeChange: (value: string) => void;
-  onModelChange: (value: string) => void;
-  onVariantChange: (value: string) => void;
-  onStreamModeChange: (value: "poll" | "sse" | "turn") => void;
-  onToggleStream: () => void;
+  sessionModel?: string | null;
+  sessionVariant?: string | null;
+  sessionPermissionMode?: string | null;
+  sessionMcpServerCount: number;
+  sessionSkillSourceCount: number;
   onEndSession: () => void;
   eventError: string | null;
   questionRequests: QuestionEventData[];
@@ -91,6 +80,18 @@ const ChatPanel = ({
   onAnswerQuestion: (request: QuestionEventData) => void;
   onRejectQuestion: (requestId: string) => void;
   onReplyPermission: (requestId: string, reply: "once" | "always" | "reject") => void;
+  modesByAgent: Record<string, AgentModeInfo[]>;
+  modelsByAgent: Record<string, AgentModelInfo[]>;
+  defaultModelByAgent: Record<string, string>;
+  modesLoadingByAgent: Record<string, boolean>;
+  modelsLoadingByAgent: Record<string, boolean>;
+  modesErrorByAgent: Record<string, string | null>;
+  modelsErrorByAgent: Record<string, string | null>;
+  mcpServers: McpServerEntry[];
+  onMcpServersChange: (servers: McpServerEntry[]) => void;
+  mcpConfigError: string | null;
+  skillSources: SkillSource[];
+  onSkillSourcesChange: (sources: SkillSource[]) => void;
 }) => {
   const [showAgentMenu, setShowAgentMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -107,19 +108,8 @@ const ChatPanel = ({
     return () => document.removeEventListener("mousedown", handler);
   }, [showAgentMenu]);
 
-  const agentLabels: Record<string, string> = {
-    claude: "Claude Code",
-    codex: "Codex",
-    opencode: "OpenCode",
-    amp: "Amp",
-    codebuff: "Codebuff",
-    mock: "Mock"
-  };
 
   const hasApprovals = questionRequests.length > 0 || permissionRequests.length > 0;
-  const isTurnMode = streamMode === "turn";
-  const isStreaming = isTurnMode ? turnStreaming : polling;
-  const turnLabel = turnStreaming ? "Streaming" : "On Send";
 
   return (
     <div className="chat-panel">
@@ -128,12 +118,6 @@ const ChatPanel = ({
           <MessageSquare className="button-icon" />
           <span className="panel-title">{sessionId ? "Session" : "No Session"}</span>
           {sessionId && <span className="session-id-display">{sessionId}</span>}
-          {sessionId && (
-            <span className="session-agent-display">
-              {agentLabel}
-              {currentAgentVersion && <span className="session-agent-version">v{currentAgentVersion}</span>}
-            </span>
-          )}
         </div>
         <div className="panel-header-right">
           {sessionId && (
@@ -147,42 +131,6 @@ const ChatPanel = ({
               End
             </button>
           )}
-          <div className="setup-stream">
-            <select
-              className="setup-select-small"
-              value={streamMode}
-              onChange={(e) => onStreamModeChange(e.target.value as "poll" | "sse" | "turn")}
-              title="Stream Mode"
-              disabled={!sessionId}
-            >
-              <option value="poll">Poll</option>
-              <option value="sse">SSE</option>
-              <option value="turn">Turn</option>
-            </select>
-            <button
-              className={`setup-stream-btn ${isStreaming ? "active" : ""}`}
-              onClick={onToggleStream}
-              title={isTurnMode ? "Turn streaming starts on send" : polling ? "Stop streaming" : "Start streaming"}
-              disabled={!sessionId || isTurnMode}
-            >
-              {isTurnMode ? (
-                <>
-                  <PlayCircle size={14} />
-                  <span>{turnLabel}</span>
-                </>
-              ) : polling ? (
-                <>
-                  <PauseCircle size={14} />
-                  <span>Pause</span>
-                </>
-              ) : (
-                <>
-                  <PlayCircle size={14} />
-                  <span>Resume</span>
-                </>
-              )}
-            </button>
-          </div>
         </div>
       </div>
 
@@ -200,32 +148,27 @@ const ChatPanel = ({
                 <Plus className="button-icon" />
                 Create Session
               </button>
-              {showAgentMenu && (
-                <div className="empty-state-menu">
-                  {agentsLoading && <div className="sidebar-add-status">Loading agents...</div>}
-                  {agentsError && <div className="sidebar-add-status error">{agentsError}</div>}
-                  {!agentsLoading && !agentsError && agents.length === 0 && (
-                    <div className="sidebar-add-status">No agents available.</div>
-                  )}
-                  {!agentsLoading && !agentsError &&
-                    agents.map((agent) => (
-                      <button
-                        key={agent.id}
-                        className="sidebar-add-option"
-                        onClick={() => {
-                          onCreateSession(agent.id);
-                          setShowAgentMenu(false);
-                        }}
-                      >
-                        <div className="agent-option-left">
-                          <span className="agent-option-name">{agentLabels[agent.id] ?? agent.id}</span>
-                          {agent.version && <span className="agent-badge version">v{agent.version}</span>}
-                        </div>
-                        {agent.installed && <span className="agent-badge installed">Installed</span>}
-                      </button>
-                    ))}
-                </div>
-              )}
+              <SessionCreateMenu
+                agents={agents}
+                agentsLoading={agentsLoading}
+                agentsError={agentsError}
+                modesByAgent={modesByAgent}
+                modelsByAgent={modelsByAgent}
+                defaultModelByAgent={defaultModelByAgent}
+                modesLoadingByAgent={modesLoadingByAgent}
+                modelsLoadingByAgent={modelsLoadingByAgent}
+                modesErrorByAgent={modesErrorByAgent}
+                modelsErrorByAgent={modelsErrorByAgent}
+                mcpServers={mcpServers}
+                onMcpServersChange={onMcpServersChange}
+                mcpConfigError={mcpConfigError}
+                skillSources={skillSources}
+                onSkillSourcesChange={onSkillSourcesChange}
+                onSelectAgent={onSelectAgent}
+                onCreateSession={onCreateSession}
+                open={showAgentMenu}
+                onClose={() => setShowAgentMenu(false)}
+              />
             </div>
           </div>
         ) : transcriptEntries.length === 0 && !sessionError ? (
@@ -233,7 +176,7 @@ const ChatPanel = ({
             <Terminal className="empty-state-icon" />
             <div className="empty-state-title">Ready to Chat</div>
             <p className="empty-state-text">Send a message to start a conversation with the agent.</p>
-            {agentId === "mock" && (
+            {agentLabel === "Mock" && (
               <div className="mock-agent-hint">
                 The mock agent simulates agent responses for testing the inspector UI without requiring API credentials. Send <code>help</code> for available commands.
               </div>
@@ -270,23 +213,37 @@ const ChatPanel = ({
         onSendMessage={onSendMessage}
         onKeyDown={onKeyDown}
         placeholder={sessionId ? "Send a message..." : "Select or create a session first"}
-        disabled={!sessionId || turnStreaming}
+        disabled={!sessionId}
       />
 
-      <ChatSetup
-        agentMode={agentMode}
-        permissionMode={permissionMode}
-        model={model}
-        variant={variant}
-        activeModes={activeModes}
-        modesLoading={modesLoading}
-        modesError={modesError}
-        onAgentModeChange={onAgentModeChange}
-        onPermissionModeChange={onPermissionModeChange}
-        onModelChange={onModelChange}
-        onVariantChange={onVariantChange}
-        hasSession={hasSession}
-      />
+      {sessionId && (
+        <div className="session-config-bar">
+          <div className="session-config-field">
+            <span className="session-config-label">Agent</span>
+            <span className="session-config-value">{agentLabel}</span>
+          </div>
+          <div className="session-config-field">
+            <span className="session-config-label">Model</span>
+            <span className="session-config-value">{sessionModel || "-"}</span>
+          </div>
+          <div className="session-config-field">
+            <span className="session-config-label">Variant</span>
+            <span className="session-config-value">{sessionVariant || "-"}</span>
+          </div>
+          <div className="session-config-field">
+            <span className="session-config-label">Permission</span>
+            <span className="session-config-value">{sessionPermissionMode || "-"}</span>
+          </div>
+          <div className="session-config-field">
+            <span className="session-config-label">MCP Servers</span>
+            <span className="session-config-value">{sessionMcpServerCount}</span>
+          </div>
+          <div className="session-config-field">
+            <span className="session-config-label">Skills</span>
+            <span className="session-config-value">{sessionSkillSourceCount}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

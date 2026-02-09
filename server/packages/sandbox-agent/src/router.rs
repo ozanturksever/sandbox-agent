@@ -1,63 +1,142 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
-use std::io::{BufRead, BufReader, Write};
+use std::fs;
+use std::io::{BufRead, BufReader, Cursor, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
-use std::process::Stdio;
+use std::path::{Path as StdPath, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::sse::Event;
 use axum::response::{IntoResponse, Response, Sse};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Json;
 use axum::Router;
+use base64::Engine;
 use futures::{stream, StreamExt};
 use reqwest::Client;
 use sandbox_agent_error::{AgentError, ErrorType, ProblemDetails, SandboxError};
 use sandbox_agent_universal_agent_schema::{
     codex as codex_schema, convert_amp, convert_claude, convert_codebuff, convert_codex,
-    convert_opencode,
-    AgentUnparsedData, ContentPart, ErrorData, EventConversion, EventSource, FileAction,
-    ItemDeltaData, ItemEventData, ItemKind, ItemRole, ItemStatus, PermissionEventData,
-    PermissionStatus, QuestionEventData, QuestionStatus, ReasoningVisibility, SessionEndReason,
-    SessionEndedData, SessionStartedData, StderrOutput, TerminatedBy, UniversalEvent,
-    UniversalEventData, UniversalEventType, UniversalItem,
+    convert_opencode, turn_ended_event, turn_started_event, AgentUnparsedData, ContentPart,
+    ErrorData, EventConversion, EventSource, FileAction, ItemDeltaData, ItemEventData, ItemKind,
+    ItemRole, ItemStatus, PermissionEventData, PermissionStatus, QuestionEventData, QuestionStatus,
+    ReasoningVisibility, SessionEndReason, SessionEndedData, SessionStartedData, StderrOutput,
+    TerminatedBy, TurnEventData, TurnPhase, UniversalEvent, UniversalEventData, UniversalEventType,
+    UniversalItem,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use serde_json::{json, Map, Value};
+use tar::Archive;
+use tokio::sync::futures::OwnedNotified;
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex, Notify};
 use tokio::time::sleep;
 use tokio_stream::wrappers::BroadcastStream;
+use toml_edit::{value, Array, DocumentMut, Item, Table};
 use tower_http::trace::TraceLayer;
+use tracing::Span;
 use utoipa::{Modify, OpenApi, ToSchema};
 
 use crate::agent_server_logs::AgentServerLogs;
+use crate::opencode_compat::{build_opencode_router, OpenCodeAppState};
 use crate::ui;
 use sandbox_agent_agent_management::agents::{
     AgentError as ManagerError, AgentId, AgentManager, InstallOptions, SpawnOptions, StreamingSpawn,
 };
 use sandbox_agent_agent_management::credentials::{
-    extract_all_credentials, CredentialExtractionOptions, ExtractedCredentials,
+    extract_all_credentials, AuthType, CredentialExtractionOptions, ExtractedCredentials,
+    ProviderCredentials,
 };
 
 const MOCK_EVENT_DELAY_MS: u64 = 200;
 static USER_MESSAGE_COUNTER: AtomicU64 = AtomicU64::new(1);
+const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models?beta=true";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+const CODEX_MODEL_LIST_TIMEOUT_SECS: u64 = 10;
+const SKILL_ROOTS: [&str; 3] = [".agents/skills", ".claude/skills", ".opencode/skill"];
+
+fn claude_fallback_models() -> AgentModelsResponse {
+    // Claude Code accepts model aliases: default, sonnet, opus, haiku
+    // These work for both API key and OAuth users
+    AgentModelsResponse {
+        models: vec![
+            AgentModelInfo {
+                id: "default".to_string(),
+                name: Some("Default (recommended)".to_string()),
+                variants: None,
+                default_variant: None,
+            },
+            AgentModelInfo {
+                id: "sonnet".to_string(),
+                name: Some("Sonnet".to_string()),
+                variants: None,
+                default_variant: None,
+            },
+            AgentModelInfo {
+                id: "opus".to_string(),
+                name: Some("Opus".to_string()),
+                variants: None,
+                default_variant: None,
+            },
+            AgentModelInfo {
+                id: "haiku".to_string(),
+                name: Some("Haiku".to_string()),
+                variants: None,
+                default_variant: None,
+            },
+        ],
+        default_model: Some("default".to_string()),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrandingMode {
+    #[default]
+    SandboxAgent,
+    Gigacode,
+}
+
+impl BrandingMode {
+    pub fn product_name(&self) -> &'static str {
+        match self {
+            BrandingMode::SandboxAgent => "Sandbox Agent",
+            BrandingMode::Gigacode => "Gigacode",
+        }
+    }
+
+    pub fn docs_url(&self) -> &'static str {
+        match self {
+            BrandingMode::SandboxAgent => "https://sandboxagent.dev",
+            BrandingMode::Gigacode => "https://gigacode.dev",
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct AppState {
     auth: AuthConfig,
     agent_manager: Arc<AgentManager>,
     session_manager: Arc<SessionManager>,
+    pub(crate) branding: BrandingMode,
 }
 
 impl AppState {
     pub fn new(auth: AuthConfig, agent_manager: AgentManager) -> Self {
+        Self::with_branding(auth, agent_manager, BrandingMode::SandboxAgent)
+    }
+
+    pub fn with_branding(
+        auth: AuthConfig,
+        agent_manager: AgentManager,
+        branding: BrandingMode,
+    ) -> Self {
         let agent_manager = Arc::new(agent_manager);
         let session_manager = Arc::new(SessionManager::new(agent_manager.clone()));
         session_manager
@@ -67,7 +146,16 @@ impl AppState {
             auth,
             agent_manager,
             session_manager,
+            branding,
         }
+    }
+
+    pub(crate) fn session_manager(&self) -> Arc<SessionManager> {
+        self.session_manager.clone()
+    }
+
+    pub(crate) async fn ensure_opencode_server(&self) -> Result<String, SandboxError> {
+        self.session_manager.ensure_opencode_server().await
     }
 }
 
@@ -96,6 +184,7 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
         .route("/agents", get(list_agents))
         .route("/agents/:agent/install", post(install_agent))
         .route("/agents/:agent/modes", get(get_agent_modes))
+        .route("/agents/:agent/models", get(get_agent_models))
         .route("/sessions", get(list_sessions))
         .route("/sessions/:session_id", post(create_session))
         .route("/sessions/:session_id/messages", post(post_message))
@@ -118,6 +207,13 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
             "/sessions/:session_id/permissions/:permission_id/reply",
             post(reply_permission),
         )
+        .route("/fs/entries", get(fs_entries))
+        .route("/fs/file", get(fs_read_file).put(fs_write_file))
+        .route("/fs/entry", delete(fs_delete_entry))
+        .route("/fs/mkdir", post(fs_mkdir))
+        .route("/fs/move", post(fs_move))
+        .route("/fs/stat", get(fs_stat))
+        .route("/fs/upload-batch", post(fs_upload_batch))
         .with_state(shared.clone());
 
     if shared.auth.token.is_some() {
@@ -127,16 +223,76 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
         ));
     }
 
+    let opencode_state = OpenCodeAppState::new(shared.clone());
+    let mut opencode_router = build_opencode_router(opencode_state.clone());
+    let mut opencode_root_router = build_opencode_router(opencode_state);
+    if shared.auth.token.is_some() {
+        opencode_router = opencode_router.layer(axum::middleware::from_fn_with_state(
+            shared.clone(),
+            require_token,
+        ));
+        opencode_root_router = opencode_root_router.layer(axum::middleware::from_fn_with_state(
+            shared.clone(),
+            require_token,
+        ));
+    }
+
     let mut router = Router::new()
         .route("/", get(get_root))
         .nest("/v1", v1_router)
+        .nest("/opencode", opencode_router)
+        .merge(opencode_root_router)
         .fallback(not_found);
 
-    if ui::is_enabled() {
-        router = router.merge(ui::router());
+    router = router.merge(ui::router());
+
+    let http_logging = match std::env::var("SANDBOX_AGENT_LOG_HTTP") {
+        Ok(value) if value == "0" || value.eq_ignore_ascii_case("false") => false,
+        _ => true,
+    };
+    if http_logging {
+        let include_headers = std::env::var("SANDBOX_AGENT_LOG_HTTP_HEADERS").is_ok();
+        let trace_layer = TraceLayer::new_for_http()
+            .make_span_with(move |req: &Request<_>| {
+                if include_headers {
+                    let mut headers = Vec::new();
+                    for (name, value) in req.headers().iter() {
+                        let name_str = name.as_str();
+                        let display_value = if name_str.eq_ignore_ascii_case("authorization") {
+                            "<redacted>".to_string()
+                        } else {
+                            value.to_str().unwrap_or("<binary>").to_string()
+                        };
+                        headers.push((name_str.to_string(), display_value));
+                    }
+                    tracing::info_span!(
+                        "http.request",
+                        method = %req.method(),
+                        uri = %req.uri(),
+                        headers = ?headers
+                    )
+                } else {
+                    tracing::info_span!(
+                        "http.request",
+                        method = %req.method(),
+                        uri = %req.uri()
+                    )
+                }
+            })
+            .on_request(|_req: &Request<_>, span: &Span| {
+                tracing::info!(parent: span, "request");
+            })
+            .on_response(|res: &Response<_>, latency: Duration, span: &Span| {
+                tracing::info!(
+                    parent: span,
+                    status = %res.status(),
+                    latency_ms = latency.as_millis()
+                );
+            });
+        router = router.layer(trace_layer);
     }
 
-    (router.layer(TraceLayer::new_for_http()), shared)
+    (router, shared)
 }
 
 pub async fn shutdown_servers(state: &Arc<AppState>) {
@@ -149,6 +305,7 @@ pub async fn shutdown_servers(state: &Arc<AppState>) {
         get_health,
         install_agent,
         get_agent_modes,
+        get_agent_models,
         list_agents,
         list_sessions,
         create_session,
@@ -159,13 +316,23 @@ pub async fn shutdown_servers(state: &Arc<AppState>) {
         get_events_sse,
         reply_question,
         reject_question,
-        reply_permission
+        reply_permission,
+        fs_entries,
+        fs_read_file,
+        fs_write_file,
+        fs_delete_entry,
+        fs_mkdir,
+        fs_move,
+        fs_stat,
+        fs_upload_batch
     ),
     components(
         schemas(
             AgentInstallRequest,
             AgentModeInfo,
             AgentModesResponse,
+            AgentModelInfo,
+            AgentModelsResponse,
             AgentCapabilities,
             AgentInfo,
             AgentListResponse,
@@ -175,8 +342,29 @@ pub async fn shutdown_servers(state: &Arc<AppState>) {
             SessionListResponse,
             HealthResponse,
             CreateSessionRequest,
+            SkillsConfig,
+            SkillSource,
+            McpCommand,
+            McpRemoteTransport,
+            McpOAuthConfig,
+            McpOAuthConfigOrDisabled,
+            McpServerConfig,
             CreateSessionResponse,
+            FsPathQuery,
+            FsEntriesQuery,
+            FsSessionQuery,
+            FsDeleteQuery,
+            FsUploadBatchQuery,
+            FsEntryType,
+            FsEntry,
+            FsStat,
+            FsWriteResponse,
+            FsMoveRequest,
+            FsMoveResponse,
+            FsActionResponse,
+            FsUploadBatchResponse,
             MessageRequest,
+            MessageAttachment,
             EventsQuery,
             TurnStreamQuery,
             EventsResponse,
@@ -186,6 +374,8 @@ pub async fn shutdown_servers(state: &Arc<AppState>) {
             EventSource,
             SessionStartedData,
             SessionEndedData,
+            TurnEventData,
+            TurnPhase,
             SessionEndReason,
             TerminatedBy,
             StderrOutput,
@@ -215,7 +405,8 @@ pub async fn shutdown_servers(state: &Arc<AppState>) {
     tags(
         (name = "meta", description = "Service metadata"),
         (name = "agents", description = "Agent management"),
-        (name = "sessions", description = "Session management")
+        (name = "sessions", description = "Session management"),
+        (name = "fs", description = "Filesystem operations")
     ),
     modifiers(&ServerAddon)
 )]
@@ -254,6 +445,7 @@ struct SessionState {
     permission_mode: String,
     model: Option<String>,
     variant: Option<String>,
+    working_dir: PathBuf,
     native_session_id: Option<String>,
     ended: bool,
     ended_exit_code: Option<i32>,
@@ -265,6 +457,7 @@ struct SessionState {
     events: Vec<UniversalEvent>,
     pending_questions: HashMap<String, PendingQuestion>,
     pending_permissions: HashMap<String, PendingPermission>,
+    always_allow_actions: HashSet<String>,
     item_started: HashSet<String>,
     item_delta_seen: HashSet<String>,
     item_map: HashMap<String, String>,
@@ -278,6 +471,12 @@ struct SessionState {
     claude_message_counter: u64,
     pending_assistant_native_ids: VecDeque<String>,
     pending_assistant_counter: u64,
+    created_at: i64,
+    updated_at: i64,
+    directory: Option<String>,
+    title: Option<String>,
+    mcp: Option<BTreeMap<String, McpServerConfig>>,
+    skills: Option<SkillsConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -304,6 +503,13 @@ impl SessionState {
             request.permission_mode.as_deref(),
         )?;
         let (broadcaster, _rx) = broadcast::channel(256);
+        let working_dir = std::env::current_dir().map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
 
         Ok(Self {
             session_id,
@@ -312,6 +518,7 @@ impl SessionState {
             permission_mode,
             model: request.model.clone(),
             variant: request.variant.clone(),
+            working_dir,
             native_session_id: None,
             ended: false,
             ended_exit_code: None,
@@ -323,6 +530,7 @@ impl SessionState {
             events: Vec::new(),
             pending_questions: HashMap::new(),
             pending_permissions: HashMap::new(),
+            always_allow_actions: HashSet::new(),
             item_started: HashSet::new(),
             item_delta_seen: HashSet::new(),
             item_map: HashMap::new(),
@@ -336,6 +544,12 @@ impl SessionState {
             claude_message_counter: 0,
             pending_assistant_native_ids: VecDeque::new(),
             pending_assistant_counter: 0,
+            created_at: now,
+            updated_at: now,
+            directory: request.directory.clone(),
+            title: request.title.clone(),
+            mcp: request.mcp.clone(),
+            skills: request.skills.clone(),
         })
     }
 
@@ -376,6 +590,12 @@ impl SessionState {
                     events.push(event);
                 }
             }
+        }
+        if !events.is_empty() {
+            self.updated_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(self.updated_at);
         }
         events
     }
@@ -478,6 +698,7 @@ impl SessionState {
                     }
                     if conversion.event_type == UniversalEventType::ItemCompleted
                         && data.item.kind == ItemKind::Message
+                        && !matches!(data.item.role, Some(ItemRole::User))
                         && !self.item_delta_seen.contains(&data.item.item_id)
                     {
                         if let Some(delta) = text_delta_from_parts(&data.item.content) {
@@ -552,6 +773,30 @@ impl SessionState {
 
         self.update_pending(&event);
         self.update_item_tracking(&event);
+
+        // Suppress question-tool permissions (AskUserQuestion/ExitPlanMode) from frontends.
+        // The permission is still stored in pending_permissions (via update_pending above)
+        // so reply_question/reject_question can find and resolve it internally.
+        if matches!(
+            event.event_type,
+            UniversalEventType::PermissionRequested | UniversalEventType::PermissionResolved
+        ) {
+            if let UniversalEventData::Permission(ref data) = event.data {
+                if is_question_tool_action(&data.action) {
+                    return None;
+                }
+            }
+        }
+        if event.event_type == UniversalEventType::PermissionRequested
+            && self.permission_mode == "acceptEdits"
+        {
+            if let UniversalEventData::Permission(ref data) = event.data {
+                if is_file_change_action(&data.action) {
+                    return None;
+                }
+            }
+        }
+
         self.events.push(event.clone());
         let _ = self.broadcaster.send(event.clone());
         if self.native_session_id.is_none() {
@@ -627,6 +872,29 @@ impl SessionState {
 
     fn take_permission(&mut self, permission_id: &str) -> Option<PendingPermission> {
         self.pending_permissions.remove(permission_id)
+    }
+
+    fn remember_permission_allow_for_session(&mut self, action: &str, metadata: &Option<Value>) {
+        for key in permission_cache_keys(action, metadata) {
+            self.always_allow_actions.insert(key);
+        }
+    }
+
+    fn should_auto_approve_permission(&self, action: &str, metadata: &Option<Value>) -> bool {
+        permission_cache_keys(action, metadata)
+            .iter()
+            .any(|key| self.always_allow_actions.contains(key))
+    }
+
+    /// Find and remove a pending permission whose action matches a question tool
+    /// (AskUserQuestion or ExitPlanMode variants). Returns (permission_id, PendingPermission).
+    fn take_question_tool_permission(&mut self) -> Option<(String, PendingPermission)> {
+        let key = self
+            .pending_permissions
+            .iter()
+            .find(|(_, p)| is_question_tool_action(&p.action))
+            .map(|(k, _)| k.clone());
+        key.and_then(|k| self.pending_permissions.remove(&k).map(|p| (k, p)))
     }
 
     fn mark_ended(
@@ -745,11 +1013,18 @@ struct AgentServerManager {
 }
 
 #[derive(Debug)]
-struct SessionManager {
+pub(crate) struct SessionManager {
     agent_manager: Arc<AgentManager>,
     sessions: Mutex<Vec<SessionState>>,
     server_manager: Arc<AgentServerManager>,
     http_client: Client,
+    model_catalog: Mutex<ModelCatalogState>,
+}
+
+#[derive(Debug, Default)]
+struct ModelCatalogState {
+    models: HashMap<AgentId, AgentModelsResponse>,
+    in_flight: HashMap<AgentId, Arc<Notify>>,
 }
 
 /// Shared Codex app-server process that handles multiple sessions via JSON-RPC.
@@ -759,11 +1034,15 @@ struct CodexServer {
     /// Sender for writing to the process stdin
     stdin_sender: mpsc::UnboundedSender<String>,
     /// Pending JSON-RPC requests awaiting responses, keyed by request ID
-    pending_requests: std::sync::Mutex<HashMap<i64, oneshot::Sender<Value>>>,
+    pending_requests: std::sync::Mutex<HashMap<i64, oneshot::Sender<CodexRequestResult>>>,
+    /// Optional mapping from request ID to session ID for routing request-scoped errors
+    request_sessions: std::sync::Mutex<HashMap<i64, String>>,
     /// Next request ID for JSON-RPC
     next_id: AtomicI64,
     /// Whether initialize/initialized handshake has completed
     initialized: std::sync::Mutex<bool>,
+    /// Serializes initialize handshakes so only one request is in flight at a time.
+    initialize_lock: Mutex<()>,
     /// Mapping from thread_id to session_id for routing notifications
     thread_sessions: std::sync::Mutex<HashMap<String, String>>,
 }
@@ -781,8 +1060,10 @@ impl CodexServer {
         Self {
             stdin_sender,
             pending_requests: std::sync::Mutex::new(HashMap::new()),
+            request_sessions: std::sync::Mutex::new(HashMap::new()),
             next_id: AtomicI64::new(1),
             initialized: std::sync::Mutex::new(false),
+            initialize_lock: Mutex::new(()),
             thread_sessions: std::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -791,14 +1072,37 @@ impl CodexServer {
         self.next_id.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn send_request(&self, id: i64, request: &impl Serialize) -> Option<oneshot::Receiver<Value>> {
+    fn send_request(
+        &self,
+        id: i64,
+        request: &impl Serialize,
+    ) -> Option<oneshot::Receiver<CodexRequestResult>> {
+        self.send_request_with_session(id, request, None)
+    }
+
+    fn send_request_with_session(
+        &self,
+        id: i64,
+        request: &impl Serialize,
+        session_id: Option<String>,
+    ) -> Option<oneshot::Receiver<CodexRequestResult>> {
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = self.pending_requests.lock().unwrap();
             pending.insert(id, tx);
         }
+        if let Some(session_id) = session_id {
+            let mut sessions = self.request_sessions.lock().unwrap();
+            sessions.insert(id, session_id);
+        }
         let line = serde_json::to_string(request).ok()?;
-        self.stdin_sender.send(line).ok()?;
+        if self.stdin_sender.send(line).is_err() {
+            let mut pending = self.pending_requests.lock().unwrap();
+            pending.remove(&id);
+            let mut sessions = self.request_sessions.lock().unwrap();
+            sessions.remove(&id);
+            return None;
+        }
         Some(rx)
     }
 
@@ -809,7 +1113,7 @@ impl CodexServer {
         self.stdin_sender.send(line).is_ok()
     }
 
-    fn complete_request(&self, id: i64, result: Value) {
+    fn complete_request(&self, id: i64, result: CodexRequestResult) {
         let tx = {
             let mut pending = self.pending_requests.lock().unwrap();
             pending.remove(&id)
@@ -817,6 +1121,11 @@ impl CodexServer {
         if let Some(tx) = tx {
             let _ = tx.send(result);
         }
+    }
+
+    fn take_request_session(&self, id: i64) -> Option<String> {
+        let mut sessions = self.request_sessions.lock().unwrap();
+        sessions.remove(&id)
     }
 
     fn register_thread(&self, thread_id: String, session_id: String) {
@@ -840,6 +1149,8 @@ impl CodexServer {
     fn clear_pending(&self) {
         let mut pending = self.pending_requests.lock().unwrap();
         pending.clear();
+        let mut sessions = self.request_sessions.lock().unwrap();
+        sessions.clear();
     }
 
     fn clear_threads(&self) {
@@ -848,9 +1159,31 @@ impl CodexServer {
     }
 }
 
-struct SessionSubscription {
-    initial_events: Vec<UniversalEvent>,
-    receiver: broadcast::Receiver<UniversalEvent>,
+#[derive(Debug, Clone)]
+enum CodexRequestResult {
+    Response(Value),
+    Error(codex_schema::JsonrpcErrorError),
+}
+
+pub(crate) struct SessionSubscription {
+    pub(crate) initial_events: Vec<UniversalEvent>,
+    pub(crate) receiver: broadcast::Receiver<UniversalEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingPermissionInfo {
+    pub session_id: String,
+    pub permission_id: String,
+    pub action: String,
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingQuestionInfo {
+    pub session_id: String,
+    pub question_id: String,
+    pub prompt: String,
+    pub options: Vec<String>,
 }
 
 impl ManagedServer {
@@ -1454,6 +1787,7 @@ impl SessionManager {
             sessions: Mutex::new(Vec::new()),
             server_manager,
             http_client: Client::new(),
+            model_catalog: Mutex::new(ModelCatalogState::default()),
         }
     }
 
@@ -1472,13 +1806,40 @@ impl SessionManager {
             .find(|session| session.session_id == session_id)
     }
 
+    async fn session_working_dir(&self, session_id: &str) -> Result<PathBuf, SandboxError> {
+        let sessions = self.sessions.lock().await;
+        let session = Self::session_ref(&sessions, session_id).ok_or_else(|| {
+            SandboxError::SessionNotFound {
+                session_id: session_id.to_string(),
+            }
+        })?;
+        Ok(session.working_dir.clone())
+    }
+
+    pub(crate) async fn set_session_overrides(
+        &self,
+        session_id: &str,
+        model: Option<String>,
+        variant: Option<String>,
+    ) -> Result<(), SandboxError> {
+        let mut sessions = self.sessions.lock().await;
+        let session = Self::session_mut(&mut sessions, session_id).ok_or_else(|| {
+            SandboxError::SessionNotFound {
+                session_id: session_id.to_string(),
+            }
+        })?;
+        session.model = model;
+        session.variant = variant;
+        Ok(())
+    }
+
     /// Read agent stderr for error diagnostics
     fn read_agent_stderr(&self, agent: AgentId) -> Option<StderrOutput> {
         let logs = AgentServerLogs::new(self.server_manager.log_base_dir.clone(), agent.as_str());
         logs.read_stderr()
     }
 
-    async fn create_session(
+    pub(crate) async fn create_session(
         self: &Arc<Self>,
         session_id: String,
         request: CreateSessionRequest,
@@ -1514,6 +1875,40 @@ impl SessionManager {
             })?;
             install_result.map_err(|err| map_install_error(agent_id, err))?;
         }
+
+        let skill_dirs = if let Some(skills) = &request.skills {
+            let sources = skills.sources.clone();
+            Some(
+                tokio::task::spawn_blocking(move || install_skill_sources(&sources))
+                    .await
+                    .map_err(|err| SandboxError::StreamError {
+                        message: err.to_string(),
+                    })??,
+            )
+        } else {
+            None
+        };
+
+        if let Some(mcp) = &request.mcp {
+            self.apply_mcp_config(agent_id, mcp).await?;
+        }
+
+        if agent_id == AgentId::Opencode {
+            if let Some(skill_dirs) = skill_dirs.as_ref() {
+                self.apply_opencode_skills(skill_dirs).await?;
+            }
+        }
+
+        // Resolve default model if none was explicitly provided
+        let request = if request.model.is_none() {
+            let mut request = request;
+            if let Ok(models_response) = self.agent_models(agent_id).await {
+                request.model = models_response.default_model;
+            }
+            request
+        } else {
+            request
+        };
 
         let mut session = SessionState::new(session_id.clone(), agent_id, &request)?;
         if agent_id == AgentId::Opencode {
@@ -1587,6 +1982,205 @@ impl SessionManager {
         })
     }
 
+    async fn apply_mcp_config(
+        self: &Arc<Self>,
+        agent_id: AgentId,
+        mcp: &BTreeMap<String, McpServerConfig>,
+    ) -> Result<(), SandboxError> {
+        if mcp.is_empty() {
+            return Ok(());
+        }
+        match agent_id {
+            AgentId::Claude => {
+                let mcp = mcp.clone();
+                tokio::task::spawn_blocking(move || write_claude_mcp_config(&mcp))
+                    .await
+                    .map_err(|err| SandboxError::StreamError {
+                        message: err.to_string(),
+                    })??;
+                Ok(())
+            }
+            AgentId::Codex => {
+                let mcp = mcp.clone();
+                tokio::task::spawn_blocking(move || write_codex_mcp_config(&mcp))
+                    .await
+                    .map_err(|err| SandboxError::StreamError {
+                        message: err.to_string(),
+                    })??;
+                let server = self.ensure_codex_server().await?;
+                self.reload_codex_mcp(&server).await
+            }
+            AgentId::Opencode => self.apply_opencode_mcp(mcp).await,
+            AgentId::Amp => {
+                let agent_manager = self.agent_manager.clone();
+                let mcp = mcp.clone();
+                tokio::task::spawn_blocking(move || apply_amp_mcp_config(&agent_manager, &mcp))
+                    .await
+                    .map_err(|err| SandboxError::StreamError {
+                        message: err.to_string(),
+                    })??;
+                Ok(())
+            }
+            AgentId::Mock => Ok(()),
+        }
+    }
+
+    async fn apply_opencode_skills(&self, skill_dirs: &[PathBuf]) -> Result<(), SandboxError> {
+        if skill_dirs.is_empty() {
+            return Ok(());
+        }
+        let base_url = self.ensure_opencode_server().await?;
+        let url = format!("{base_url}/config");
+        let response = self.http_client.get(&url).send().await;
+        let mut existing_paths = Vec::<String>::new();
+        if let Ok(response) = response {
+            if response.status().is_success() {
+                if let Ok(value) = response.json::<Value>().await {
+                    if let Some(paths) = value
+                        .get("skills")
+                        .and_then(|skills| skills.get("paths"))
+                        .and_then(Value::as_array)
+                    {
+                        existing_paths.extend(
+                            paths
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(|path| path.to_string()),
+                        );
+                    }
+                }
+            }
+        }
+        let mut merged = existing_paths;
+        for dir in skill_dirs {
+            let path = dir.to_string_lossy().to_string();
+            if !merged.contains(&path) {
+                merged.push(path);
+            }
+        }
+        let body = json!({ "skills": { "paths": merged } });
+        let response = self.http_client.patch(&url).json(&body).send().await;
+        let response = response.map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(SandboxError::StreamError {
+                message: format!("OpenCode config update failed: {}", response.status()),
+            })
+        }
+    }
+
+    pub(crate) async fn set_session_title(
+        &self,
+        session_id: &str,
+        title: String,
+    ) -> Result<(), SandboxError> {
+        let mut sessions = self.sessions.lock().await;
+        let Some(session) = SessionManager::session_mut(&mut sessions, session_id) else {
+            return Err(SandboxError::SessionNotFound {
+                session_id: session_id.to_string(),
+            });
+        };
+        session.title = Some(title);
+        session.updated_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(session.updated_at);
+        Ok(())
+    }
+
+    async fn clear_codex_session_model_if_unavailable(
+        &self,
+        session_id: &str,
+        model_id: &str,
+    ) -> bool {
+        let mut sessions = self.sessions.lock().await;
+        let Some(session) = SessionManager::session_mut(&mut sessions, session_id) else {
+            return false;
+        };
+        if session.agent == AgentId::Codex && session.model.as_deref() == Some(model_id) {
+            session.model = None;
+            session.updated_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(session.updated_at);
+            return true;
+        }
+        false
+    }
+
+    async fn invalidate_codex_model_cache(&self) {
+        let mut catalog = self.model_catalog.lock().await;
+        catalog.models.remove(&AgentId::Codex);
+    }
+
+    async fn codex_native_session_id(&self, session_id: &str) -> Option<String> {
+        let sessions = self.sessions.lock().await;
+        let session = SessionManager::session_ref(&sessions, session_id)?;
+        if session.agent != AgentId::Codex {
+            return None;
+        }
+        session.native_session_id.clone()
+    }
+
+    async fn handle_codex_model_unavailable(
+        &self,
+        session_id: &str,
+        model_id: &str,
+        native_session_id: Option<String>,
+    ) {
+        tracing::warn!(
+            model_id = %model_id,
+            "codex model rejected at runtime; clearing session model and refreshing model cache"
+        );
+        self.invalidate_codex_model_cache().await;
+        if !self
+            .clear_codex_session_model_if_unavailable(session_id, model_id)
+            .await
+        {
+            return;
+        }
+        let native_session_id = match native_session_id {
+            Some(native_session_id) => Some(native_session_id),
+            None => self.codex_native_session_id(session_id).await,
+        };
+        let _ = self
+            .record_conversions(
+                session_id,
+                vec![codex_model_unavailable_status_event(
+                    native_session_id,
+                    model_id,
+                )],
+            )
+            .await;
+    }
+
+    pub(crate) async fn delete_session(&self, session_id: &str) -> Result<(), SandboxError> {
+        let (agent, native_session_id) = {
+            let mut sessions = self.sessions.lock().await;
+            let Some(index) = sessions
+                .iter()
+                .position(|session| session.session_id == session_id)
+            else {
+                return Err(SandboxError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                });
+            };
+            let session = sessions.remove(index);
+            (session.agent, session.native_session_id)
+        };
+
+        if agent == AgentId::Opencode || agent == AgentId::Codex {
+            self.server_manager
+                .unregister_session(agent, session_id, native_session_id.as_deref())
+                .await;
+        }
+
+        Ok(())
+    }
+
     async fn agent_modes(&self, agent: AgentId) -> Result<Vec<AgentModeInfo>, SandboxError> {
         if agent != AgentId::Opencode {
             return Ok(agent_modes_for(agent));
@@ -1605,25 +2199,105 @@ impl SessionManager {
         }
     }
 
-    async fn send_message(
+    pub(crate) async fn agent_models(
+        self: &Arc<Self>,
+        agent: AgentId,
+    ) -> Result<AgentModelsResponse, SandboxError> {
+        enum Acquisition {
+            Hit(AgentModelsResponse),
+            Wait(OwnedNotified),
+            Build(Arc<Notify>),
+        }
+
+        loop {
+            let acquisition = {
+                let mut catalog = self.model_catalog.lock().await;
+                if let Some(response) = catalog.models.get(&agent) {
+                    Acquisition::Hit(response.clone())
+                } else if let Some(notify) = catalog.in_flight.get(&agent) {
+                    Acquisition::Wait(notify.clone().notified_owned())
+                } else {
+                    let notify = Arc::new(Notify::new());
+                    catalog.in_flight.insert(agent, notify.clone());
+                    Acquisition::Build(notify)
+                }
+            };
+
+            match acquisition {
+                Acquisition::Hit(response) => return Ok(response),
+                Acquisition::Wait(waiting) => waiting.await,
+                Acquisition::Build(notify) => {
+                    let response = self.fetch_agent_models_uncached(agent).await;
+                    let mut catalog = self.model_catalog.lock().await;
+                    catalog.in_flight.remove(&agent);
+                    if let Ok(response_value) = &response {
+                        if should_cache_agent_models(agent, response_value) {
+                            catalog.models.insert(agent, response_value.clone());
+                        }
+                    }
+                    notify.notify_waiters();
+                    return response;
+                }
+            }
+        }
+    }
+
+    async fn fetch_agent_models_uncached(
+        self: &Arc<Self>,
+        agent: AgentId,
+    ) -> Result<AgentModelsResponse, SandboxError> {
+        match agent {
+            AgentId::Claude => match self.fetch_claude_models().await {
+                Ok(response) if !response.models.is_empty() => Ok(response),
+                _ => Ok(claude_fallback_models()),
+            },
+            AgentId::Codex => self.fetch_codex_models().await,
+            AgentId::Opencode => match self.fetch_opencode_models().await {
+                Ok(models) => Ok(models),
+                Err(_) => Ok(AgentModelsResponse {
+                    models: Vec::new(),
+                    default_model: None,
+                }),
+            },
+            AgentId::Amp => Ok(amp_models_response()),
+            AgentId::Mock => Ok(mock_models_response()),
+        }
+    }
+
+    pub(crate) async fn send_message(
         self: &Arc<Self>,
         session_id: String,
         message: String,
+        attachments: Vec<MessageAttachment>,
     ) -> Result<(), SandboxError> {
         // Use allow_ended=true and do explicit check to allow resumable agents
         let session_snapshot = self.session_snapshot_for_message(&session_id).await?;
+        let prompt_with_attachments = format_message_with_attachments(&message, &attachments);
+        let prompt = if session_snapshot.agent == AgentId::Opencode {
+            message.clone()
+        } else {
+            prompt_with_attachments
+        };
+        if !agent_emits_turn_started(session_snapshot.agent) {
+            let _ = self
+                .record_conversions(
+                    &session_id,
+                    vec![turn_started_event(None, None).synthetic()],
+                )
+                .await;
+        }
         if session_snapshot.agent == AgentId::Mock {
-            self.send_mock_message(session_id, message).await?;
+            self.send_mock_message(session_id, prompt).await?;
             return Ok(());
         }
         if matches!(session_snapshot.agent, AgentId::Claude | AgentId::Amp) {
             let _ = self
-                .record_conversions(&session_id, user_message_conversions(&message))
+                .record_conversions(&session_id, user_message_conversions(&prompt))
                 .await;
         }
         if session_snapshot.agent == AgentId::Opencode {
             self.ensure_opencode_stream(session_id.clone()).await?;
-            self.send_opencode_prompt(&session_snapshot, &message)
+            self.send_opencode_prompt(&session_snapshot, &prompt, &attachments)
                 .await?;
             if !agent_supports_item_started(session_snapshot.agent) {
                 let _ = self
@@ -1634,7 +2308,7 @@ impl SessionManager {
         }
         if session_snapshot.agent == AgentId::Codex {
             // Use the shared Codex app-server
-            self.send_codex_turn(&session_snapshot, &message).await?;
+            self.send_codex_turn(&session_snapshot, &prompt).await?;
             if !agent_supports_item_started(session_snapshot.agent) {
                 let _ = self
                     .emit_synthetic_assistant_start(&session_snapshot.session_id)
@@ -1647,7 +2321,6 @@ impl SessionManager {
         self.reopen_session_if_ended(&session_id).await;
 
         let manager = self.agent_manager.clone();
-        let prompt = message;
         let initial_input = if session_snapshot.agent == AgentId::Claude {
             Some(claude_user_message_line(&session_snapshot, &prompt))
         } else {
@@ -1801,26 +2474,41 @@ impl SessionManager {
         Ok(EventsResponse { events, has_more })
     }
 
-    async fn list_sessions(&self) -> Vec<SessionInfo> {
+    pub(crate) async fn list_sessions(&self) -> Vec<SessionInfo> {
         let sessions = self.sessions.lock().await;
         sessions
             .iter()
             .rev()
-            .map(|state| SessionInfo {
-                session_id: state.session_id.clone(),
-                agent: state.agent.as_str().to_string(),
-                agent_mode: state.agent_mode.clone(),
-                permission_mode: state.permission_mode.clone(),
-                model: state.model.clone(),
-                variant: state.variant.clone(),
-                native_session_id: state.native_session_id.clone(),
-                ended: state.ended,
-                event_count: state.events.len() as u64,
-            })
+            .map(|state| Self::build_session_info(state))
             .collect()
     }
 
-    async fn subscribe(
+    pub(crate) async fn get_session_info(&self, session_id: &str) -> Option<SessionInfo> {
+        let sessions = self.sessions.lock().await;
+        Self::session_ref(&sessions, session_id).map(Self::build_session_info)
+    }
+
+    fn build_session_info(state: &SessionState) -> SessionInfo {
+        SessionInfo {
+            session_id: state.session_id.clone(),
+            agent: state.agent.as_str().to_string(),
+            agent_mode: state.agent_mode.clone(),
+            permission_mode: state.permission_mode.clone(),
+            model: state.model.clone(),
+            variant: state.variant.clone(),
+            native_session_id: state.native_session_id.clone(),
+            ended: state.ended,
+            event_count: state.events.len() as u64,
+            created_at: state.created_at,
+            updated_at: state.updated_at,
+            directory: state.directory.clone(),
+            title: state.title.clone(),
+            mcp: state.mcp.clone(),
+            skills: state.skills.clone(),
+        }
+    }
+
+    pub(crate) async fn subscribe(
         &self,
         session_id: &str,
         offset: u64,
@@ -1842,6 +2530,38 @@ impl SessionManager {
             initial_events,
             receiver,
         })
+    }
+
+    pub(crate) async fn list_pending_permissions(&self) -> Vec<PendingPermissionInfo> {
+        let sessions = self.sessions.lock().await;
+        let mut items = Vec::new();
+        for session in sessions.iter() {
+            for (permission_id, pending) in session.pending_permissions.iter() {
+                items.push(PendingPermissionInfo {
+                    session_id: session.session_id.clone(),
+                    permission_id: permission_id.clone(),
+                    action: pending.action.clone(),
+                    metadata: pending.metadata.clone(),
+                });
+            }
+        }
+        items
+    }
+
+    pub(crate) async fn list_pending_questions(&self) -> Vec<PendingQuestionInfo> {
+        let sessions = self.sessions.lock().await;
+        let mut items = Vec::new();
+        for session in sessions.iter() {
+            for (question_id, pending) in session.pending_questions.iter() {
+                items.push(PendingQuestionInfo {
+                    session_id: session.session_id.clone(),
+                    question_id: question_id.clone(),
+                    prompt: pending.prompt.clone(),
+                    options: pending.options.clone(),
+                });
+            }
+        }
+        items
     }
 
     async fn subscribe_for_turn(
@@ -1872,13 +2592,13 @@ impl SessionManager {
         Ok((SessionSnapshot::from(session), subscription))
     }
 
-    async fn reply_question(
+    pub(crate) async fn reply_question(
         &self,
         session_id: &str,
         question_id: &str,
         answers: Vec<Vec<String>>,
     ) -> Result<(), SandboxError> {
-        let (agent, native_session_id, pending_question, claude_sender) = {
+        let (agent, native_session_id, pending_question, claude_sender, linked_permission) = {
             let mut sessions = self.sessions.lock().await;
             let session = Self::session_mut(&mut sessions, session_id).ok_or_else(|| {
                 SandboxError::SessionNotFound {
@@ -1894,11 +2614,18 @@ impl SessionManager {
             if let Some(err) = session.ended_error() {
                 return Err(err);
             }
+            // For Claude, check if there's a linked AskUserQuestion/ExitPlanMode permission
+            let linked_perm = if session.agent == AgentId::Claude {
+                session.take_question_tool_permission()
+            } else {
+                None
+            };
             (
                 session.agent,
                 session.native_session_id.clone(),
                 pending,
                 session.claude_sender(),
+                linked_perm,
             )
         };
 
@@ -1911,28 +2638,66 @@ impl SessionManager {
                     .ok_or_else(|| SandboxError::InvalidRequest {
                         message: "missing OpenCode session id".to_string(),
                     })?;
-            self.opencode_question_reply(&agent_session_id, question_id, answers)
+            self.opencode_question_reply(&agent_session_id, question_id, answers.clone())
                 .await?;
         } else if agent == AgentId::Claude {
             let sender = claude_sender.ok_or_else(|| SandboxError::InvalidRequest {
                 message: "Claude session is not active".to_string(),
             })?;
-            let session_id = native_session_id
-                .clone()
-                .unwrap_or_else(|| session_id.to_string());
-            let response_text = response.clone().unwrap_or_default();
-            let line = claude_tool_result_line(&session_id, question_id, &response_text, false);
-            sender
-                .send(line)
-                .map_err(|_| SandboxError::InvalidRequest {
-                    message: "Claude session is not active".to_string(),
-                })?;
+            if let Some((perm_id, perm)) = &linked_permission {
+                // Use the permission control response to deliver the answer.
+                // Build updatedInput from the original input with the answers map added.
+                let original_input = perm
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("input"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let mut updated = match original_input {
+                    Value::Object(map) => map,
+                    _ => serde_json::Map::new(),
+                };
+                // Build answers map: { "0": "selected option", "1": "another option", ... }
+                let answers_map: serde_json::Map<String, Value> = answers
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, inner)| {
+                        inner
+                            .first()
+                            .map(|v| (i.to_string(), Value::String(v.clone())))
+                    })
+                    .collect();
+                updated.insert("answers".to_string(), Value::Object(answers_map));
+
+                let mut response_map = serde_json::Map::new();
+                response_map.insert("updatedInput".to_string(), Value::Object(updated));
+                let line =
+                    claude_control_response_line(perm_id, "allow", Value::Object(response_map));
+                sender
+                    .send(line)
+                    .map_err(|_| SandboxError::InvalidRequest {
+                        message: "Claude session is not active".to_string(),
+                    })?;
+            } else {
+                // No linked permission — fall back to tool_result
+                let native_sid = native_session_id
+                    .clone()
+                    .unwrap_or_else(|| session_id.to_string());
+                let response_text = response.clone().unwrap_or_default();
+                let line = claude_tool_result_line(&native_sid, question_id, &response_text, false);
+                sender
+                    .send(line)
+                    .map_err(|_| SandboxError::InvalidRequest {
+                        message: "Claude session is not active".to_string(),
+                    })?;
+            }
         } else {
             // TODO: Forward question replies to subprocess agents.
         }
 
+        // Emit QuestionResolved
         if let Some(pending) = pending_question {
-            let resolved = EventConversion::new(
+            let mut conversions = vec![EventConversion::new(
                 UniversalEventType::QuestionResolved,
                 UniversalEventData::Question(QuestionEventData {
                     question_id: question_id.to_string(),
@@ -1943,19 +2708,37 @@ impl SessionManager {
                 }),
             )
             .synthetic()
-            .with_native_session(native_session_id);
-            let _ = self.record_conversions(session_id, vec![resolved]).await;
+            .with_native_session(native_session_id.clone())];
+
+            // Also emit PermissionResolved for the linked permission
+            if let Some((perm_id, perm)) = linked_permission {
+                conversions.push(
+                    EventConversion::new(
+                        UniversalEventType::PermissionResolved,
+                        UniversalEventData::Permission(PermissionEventData {
+                            permission_id: perm_id,
+                            action: perm.action,
+                            status: PermissionStatus::Accept,
+                            metadata: perm.metadata,
+                        }),
+                    )
+                    .synthetic()
+                    .with_native_session(native_session_id),
+                );
+            }
+
+            let _ = self.record_conversions(session_id, conversions).await;
         }
 
         Ok(())
     }
 
-    async fn reject_question(
+    pub(crate) async fn reject_question(
         &self,
         session_id: &str,
         question_id: &str,
     ) -> Result<(), SandboxError> {
-        let (agent, native_session_id, pending_question, claude_sender) = {
+        let (agent, native_session_id, pending_question, claude_sender, linked_permission) = {
             let mut sessions = self.sessions.lock().await;
             let session = Self::session_mut(&mut sessions, session_id).ok_or_else(|| {
                 SandboxError::SessionNotFound {
@@ -1971,11 +2754,17 @@ impl SessionManager {
             if let Some(err) = session.ended_error() {
                 return Err(err);
             }
+            let linked_perm = if session.agent == AgentId::Claude {
+                session.take_question_tool_permission()
+            } else {
+                None
+            };
             (
                 session.agent,
                 session.native_session_id.clone(),
                 pending,
                 session.claude_sender(),
+                linked_perm,
             )
         };
 
@@ -1992,26 +2781,43 @@ impl SessionManager {
             let sender = claude_sender.ok_or_else(|| SandboxError::InvalidRequest {
                 message: "Claude session is not active".to_string(),
             })?;
-            let session_id = native_session_id
-                .clone()
-                .unwrap_or_else(|| session_id.to_string());
-            let line = claude_tool_result_line(
-                &session_id,
-                question_id,
-                "User rejected the question.",
-                true,
-            );
-            sender
-                .send(line)
-                .map_err(|_| SandboxError::InvalidRequest {
-                    message: "Claude session is not active".to_string(),
-                })?;
+            if let Some((perm_id, _)) = &linked_permission {
+                // Deny via the permission control response
+                let mut response_map = serde_json::Map::new();
+                response_map.insert(
+                    "message".to_string(),
+                    Value::String("Permission denied.".to_string()),
+                );
+                let line =
+                    claude_control_response_line(perm_id, "deny", Value::Object(response_map));
+                sender
+                    .send(line)
+                    .map_err(|_| SandboxError::InvalidRequest {
+                        message: "Claude session is not active".to_string(),
+                    })?;
+            } else {
+                let native_sid = native_session_id
+                    .clone()
+                    .unwrap_or_else(|| session_id.to_string());
+                let line = claude_tool_result_line(
+                    &native_sid,
+                    question_id,
+                    "User rejected the question.",
+                    true,
+                );
+                sender
+                    .send(line)
+                    .map_err(|_| SandboxError::InvalidRequest {
+                        message: "Claude session is not active".to_string(),
+                    })?;
+            }
         } else {
             // TODO: Forward question rejections to subprocess agents.
         }
 
+        // Emit QuestionResolved
         if let Some(pending) = pending_question {
-            let resolved = EventConversion::new(
+            let mut conversions = vec![EventConversion::new(
                 UniversalEventType::QuestionResolved,
                 UniversalEventData::Question(QuestionEventData {
                     question_id: question_id.to_string(),
@@ -2022,14 +2828,32 @@ impl SessionManager {
                 }),
             )
             .synthetic()
-            .with_native_session(native_session_id);
-            let _ = self.record_conversions(session_id, vec![resolved]).await;
+            .with_native_session(native_session_id.clone())];
+
+            // Also emit PermissionResolved for the linked permission
+            if let Some((perm_id, perm)) = linked_permission {
+                conversions.push(
+                    EventConversion::new(
+                        UniversalEventType::PermissionResolved,
+                        UniversalEventData::Permission(PermissionEventData {
+                            permission_id: perm_id,
+                            action: perm.action,
+                            status: PermissionStatus::Reject,
+                            metadata: perm.metadata,
+                        }),
+                    )
+                    .synthetic()
+                    .with_native_session(native_session_id),
+                );
+            }
+
+            let _ = self.record_conversions(session_id, conversions).await;
         }
 
         Ok(())
     }
 
-    async fn reply_permission(
+    pub(crate) async fn reply_permission(
         self: &Arc<Self>,
         session_id: &str,
         permission_id: &str,
@@ -2048,6 +2872,12 @@ impl SessionManager {
                 return Err(SandboxError::InvalidRequest {
                     message: format!("unknown permission id: {permission_id}"),
                 });
+            }
+            if matches!(reply_for_status, PermissionReply::Always) {
+                if let Some(pending) = pending.as_ref() {
+                    session
+                        .remember_permission_allow_for_session(&pending.action, &pending.metadata);
+                }
             }
             if let Some(err) = session.ended_error() {
                 return Err(err);
@@ -2069,46 +2899,7 @@ impl SessionManager {
                     .ok_or_else(|| SandboxError::InvalidRequest {
                         message: "missing codex permission metadata".to_string(),
                     })?;
-            let metadata = pending.metadata.clone().unwrap_or(Value::Null);
-            let request_id = codex_request_id_from_metadata(&metadata)
-                .or_else(|| codex_request_id_from_string(permission_id))
-                .ok_or_else(|| SandboxError::InvalidRequest {
-                    message: "invalid codex permission request id".to_string(),
-                })?;
-            let request_kind = metadata
-                .get("codexRequestKind")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let response_value = match request_kind {
-                "commandExecution" => {
-                    let decision = codex_command_decision_for_reply(reply.clone());
-                    let response =
-                        codex_schema::CommandExecutionRequestApprovalResponse { decision };
-                    serde_json::to_value(response).map_err(|err| SandboxError::InvalidRequest {
-                        message: err.to_string(),
-                    })?
-                }
-                "fileChange" => {
-                    let decision = codex_file_change_decision_for_reply(reply.clone());
-                    let response = codex_schema::FileChangeRequestApprovalResponse { decision };
-                    serde_json::to_value(response).map_err(|err| SandboxError::InvalidRequest {
-                        message: err.to_string(),
-                    })?
-                }
-                _ => {
-                    return Err(SandboxError::InvalidRequest {
-                        message: "unsupported codex permission request".to_string(),
-                    });
-                }
-            };
-            let response = codex_schema::JsonrpcResponse {
-                id: request_id,
-                result: response_value,
-            };
-            let line =
-                serde_json::to_string(&response).map_err(|err| SandboxError::InvalidRequest {
-                    message: err.to_string(),
-                })?;
+            let line = codex_permission_response_line(permission_id, &pending, reply.clone())?;
             server
                 .stdin_sender
                 .send(line)
@@ -2170,8 +2961,9 @@ impl SessionManager {
 
         if let Some(pending) = pending_permission {
             let status = match reply_for_status {
-                PermissionReply::Reject => PermissionStatus::Denied,
-                PermissionReply::Once | PermissionReply::Always => PermissionStatus::Approved,
+                PermissionReply::Reject => PermissionStatus::Reject,
+                PermissionReply::Once => PermissionStatus::Accept,
+                PermissionReply::Always => PermissionStatus::AcceptForSession,
             };
             let resolved = EventConversion::new(
                 UniversalEventType::PermissionResolved,
@@ -2470,13 +3262,193 @@ impl SessionManager {
         session_id: &str,
         conversions: Vec<EventConversion>,
     ) -> Result<Vec<UniversalEvent>, SandboxError> {
-        let mut sessions = self.sessions.lock().await;
-        let session = Self::session_mut(&mut sessions, session_id).ok_or_else(|| {
-            SandboxError::SessionNotFound {
-                session_id: session_id.to_string(),
+        let (events, auto_approvals) = {
+            let mut sessions = self.sessions.lock().await;
+            let session = Self::session_mut(&mut sessions, session_id).ok_or_else(|| {
+                SandboxError::SessionNotFound {
+                    session_id: session_id.to_string(),
+                }
+            })?;
+            let mut accept_edits_permission_ids = Vec::new();
+            if session.agent == AgentId::Codex && session.permission_mode == "acceptEdits" {
+                for conversion in &conversions {
+                    if conversion.event_type != UniversalEventType::PermissionRequested {
+                        continue;
+                    }
+                    let UniversalEventData::Permission(data) = &conversion.data else {
+                        continue;
+                    };
+                    if is_file_change_action(&data.action) {
+                        accept_edits_permission_ids.push(data.permission_id.clone());
+                    }
+                }
             }
-        })?;
-        Ok(session.record_conversions(conversions))
+            let events = session.record_conversions(conversions);
+            let mut auto_approvals = Vec::new();
+            let mut seen = HashSet::new();
+            for event in &events {
+                if event.event_type != UniversalEventType::PermissionRequested {
+                    continue;
+                }
+                let UniversalEventData::Permission(data) = &event.data else {
+                    continue;
+                };
+                let cached = session.should_auto_approve_permission(&data.action, &data.metadata);
+                if is_question_tool_action(&data.action) || !cached {
+                    continue;
+                }
+                if let Some(pending) = session.take_permission(&data.permission_id) {
+                    auto_approvals.push((
+                        session.agent,
+                        session.native_session_id.clone(),
+                        session.claude_sender(),
+                        data.permission_id.clone(),
+                        pending,
+                        PermissionReply::Always,
+                    ));
+                    seen.insert(data.permission_id.clone());
+                }
+            }
+            for permission_id in accept_edits_permission_ids {
+                if seen.contains(&permission_id) {
+                    continue;
+                }
+                if let Some(pending) = session.take_permission(&permission_id) {
+                    auto_approvals.push((
+                        session.agent,
+                        session.native_session_id.clone(),
+                        session.claude_sender(),
+                        permission_id.clone(),
+                        pending,
+                        PermissionReply::Always,
+                    ));
+                    seen.insert(permission_id);
+                }
+            }
+            (events, auto_approvals)
+        };
+
+        for (agent, native_session_id, claude_sender, permission_id, pending, reply) in
+            auto_approvals
+        {
+            let reply_for_status = reply.clone();
+            let reply_result = match agent {
+                AgentId::Codex => {
+                    let (server, _) = self
+                        .server_manager
+                        .ensure_stdio_server(AgentId::Codex)
+                        .await?;
+                    let line =
+                        codex_permission_response_line(&permission_id, &pending, reply.clone())?;
+                    server
+                        .stdin_sender
+                        .send(line)
+                        .map_err(|_| SandboxError::InvalidRequest {
+                            message: "codex server not active".to_string(),
+                        })
+                }
+                AgentId::Opencode => {
+                    let agent_session_id =
+                        native_session_id
+                            .clone()
+                            .ok_or_else(|| SandboxError::InvalidRequest {
+                                message: "missing OpenCode session id".to_string(),
+                            });
+                    match agent_session_id {
+                        Ok(agent_session_id) => {
+                            self.opencode_permission_reply(
+                                &agent_session_id,
+                                &permission_id,
+                                reply.clone(),
+                            )
+                            .await
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+                AgentId::Claude => {
+                    let sender = claude_sender.ok_or_else(|| SandboxError::InvalidRequest {
+                        message: "Claude session is not active".to_string(),
+                    });
+                    match sender {
+                        Ok(sender) => {
+                            let metadata = pending.metadata.as_ref().and_then(Value::as_object);
+                            let updated_input = metadata
+                                .and_then(|map| map.get("input"))
+                                .cloned()
+                                .unwrap_or(Value::Null);
+                            let mut response_map = serde_json::Map::new();
+                            match reply.clone() {
+                                PermissionReply::Reject => {
+                                    response_map.insert(
+                                        "message".to_string(),
+                                        Value::String("Permission denied.".to_string()),
+                                    );
+                                }
+                                PermissionReply::Once | PermissionReply::Always => {
+                                    if !updated_input.is_null() {
+                                        response_map
+                                            .insert("updatedInput".to_string(), updated_input);
+                                    }
+                                }
+                            }
+                            let behavior = match reply.clone() {
+                                PermissionReply::Reject => "deny",
+                                PermissionReply::Once | PermissionReply::Always => "allow",
+                            };
+                            let line = claude_control_response_line(
+                                &permission_id,
+                                behavior,
+                                Value::Object(response_map),
+                            );
+                            sender.send(line).map_err(|_| SandboxError::InvalidRequest {
+                                message: "Claude session is not active".to_string(),
+                            })
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+                _ => Ok(()),
+            };
+
+            if let Err(err) = reply_result {
+                tracing::warn!(
+                    session_id,
+                    permission_id,
+                    ?err,
+                    "failed to auto-approve cached permission"
+                );
+                let mut sessions = self.sessions.lock().await;
+                if let Some(session) = Self::session_mut(&mut sessions, session_id) {
+                    session
+                        .pending_permissions
+                        .insert(permission_id.clone(), pending.clone());
+                }
+                continue;
+            }
+
+            let resolved = EventConversion::new(
+                UniversalEventType::PermissionResolved,
+                UniversalEventData::Permission(PermissionEventData {
+                    permission_id: permission_id.clone(),
+                    action: pending.action,
+                    status: match reply_for_status {
+                        PermissionReply::Reject => PermissionStatus::Reject,
+                        PermissionReply::Once => PermissionStatus::Accept,
+                        PermissionReply::Always => PermissionStatus::AcceptForSession,
+                    },
+                    metadata: pending.metadata,
+                }),
+            )
+            .synthetic()
+            .with_native_session(native_session_id);
+            let mut sessions = self.sessions.lock().await;
+            if let Some(session) = Self::session_mut(&mut sessions, session_id) {
+                session.record_conversions(vec![resolved]);
+            }
+        }
+
+        Ok(events)
     }
 
     async fn parse_claude_line(&self, line: &str, session_id: &str) -> Vec<EventConversion> {
@@ -2843,7 +3815,8 @@ impl SessionManager {
                 codex_schema::JsonrpcMessage::Response(response) => {
                     // Route response to waiting request
                     if let Some(id) = codex_request_id_to_i64(&response.id) {
-                        server.complete_request(id, response.result.clone());
+                        server.take_request_session(id);
+                        server.complete_request(id, CodexRequestResult::Response(response.result));
                     }
                 }
                 codex_schema::JsonrpcMessage::Notification(_) => {
@@ -2855,6 +3828,20 @@ impl SessionManager {
                             codex_thread_id_from_server_notification(&notification)
                         {
                             if let Some(session_id) = server.session_for_thread(&thread_id) {
+                                if let codex_schema::ServerNotification::Error(params) =
+                                    &notification
+                                {
+                                    if let Some(model_id) =
+                                        codex_unavailable_model_from_message(&params.error.message)
+                                    {
+                                        self.handle_codex_model_unavailable(
+                                            &session_id,
+                                            &model_id,
+                                            Some(thread_id.clone()),
+                                        )
+                                        .await;
+                                    }
+                                }
                                 let conversions =
                                     match convert_codex::notification_to_universal(&notification) {
                                         Ok(c) => c,
@@ -2896,8 +3883,28 @@ impl SessionManager {
                     }
                 }
                 codex_schema::JsonrpcMessage::Error(error) => {
-                    // Log error but don't have a session to route to
-                    eprintln!("Codex server error: {:?}", error);
+                    if let Some(id) = codex_request_id_to_i64(&error.id) {
+                        let session_id = server.take_request_session(id);
+                        server.complete_request(id, CodexRequestResult::Error(error.error.clone()));
+                        if let Some(session_id) = session_id {
+                            if let Some(model_id) =
+                                codex_unavailable_model_from_rpc_error(&error.error)
+                            {
+                                self.handle_codex_model_unavailable(&session_id, &model_id, None)
+                                    .await;
+                            }
+                            let _ = self
+                                .record_conversions(
+                                    &session_id,
+                                    vec![codex_rpc_error_to_universal(&error)],
+                                )
+                                .await;
+                        } else {
+                            eprintln!("Codex server error: {:?}", error);
+                        }
+                    } else {
+                        eprintln!("Codex server error: {:?}", error);
+                    }
                 }
             }
         }
@@ -2905,6 +3912,7 @@ impl SessionManager {
 
     /// Performs the initialize/initialized handshake with the Codex server.
     async fn codex_server_initialize(&self, server: &CodexServer) -> Result<(), SandboxError> {
+        let _initialize_guard = server.initialize_lock.lock().await;
         if server.is_initialized() {
             return Ok(());
         }
@@ -2930,7 +3938,7 @@ impl SessionManager {
         // Wait for initialize response with timeout
         let result = tokio::time::timeout(Duration::from_secs(30), rx).await;
         match result {
-            Ok(Ok(_)) => {
+            Ok(Ok(CodexRequestResult::Response(_))) => {
                 // Send initialized notification
                 let notification = codex_schema::JsonrpcNotification {
                     method: "initialized".to_string(),
@@ -2940,11 +3948,38 @@ impl SessionManager {
                 server.set_initialized();
                 Ok(())
             }
+            Ok(Ok(CodexRequestResult::Error(error))) => Err(codex_request_error_to_sandbox(
+                "initialize request failed",
+                &error,
+            )),
             Ok(Err(_)) => Err(SandboxError::StreamError {
                 message: "initialize request cancelled".to_string(),
             }),
             Err(_) => Err(SandboxError::StreamError {
                 message: "initialize request timed out".to_string(),
+            }),
+        }
+    }
+
+    async fn reload_codex_mcp(&self, server: &CodexServer) -> Result<(), SandboxError> {
+        let id = server.next_request_id();
+        let request = codex_schema::ClientRequest::ConfigMcpServerReload {
+            id: codex_schema::RequestId::from(id),
+            params: (),
+        };
+        let rx = server
+            .send_request(id, &request)
+            .ok_or_else(|| SandboxError::StreamError {
+                message: "failed to send config/mcpServer/reload request".to_string(),
+            })?;
+        let result = tokio::time::timeout(Duration::from_secs(15), rx).await;
+        match result {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(_)) => Err(SandboxError::StreamError {
+                message: "config/mcpServer/reload request cancelled".to_string(),
+            }),
+            Err(_) => Err(SandboxError::StreamError {
+                message: "config/mcpServer/reload request timed out".to_string(),
             }),
         }
     }
@@ -2977,7 +4012,7 @@ impl SessionManager {
         // Wait for thread/start response
         let result = tokio::time::timeout(Duration::from_secs(30), rx).await;
         match result {
-            Ok(Ok(response)) => {
+            Ok(Ok(CodexRequestResult::Response(response))) => {
                 // Extract thread_id from response
                 let thread_id = response
                     .get("thread")
@@ -2994,6 +4029,10 @@ impl SessionManager {
 
                 Ok(thread_id)
             }
+            Ok(Ok(CodexRequestResult::Error(error))) => Err(codex_request_error_to_sandbox(
+                "thread/start request failed",
+                &error,
+            )),
             Ok(Err(_)) => Err(SandboxError::StreamError {
                 message: "thread/start request cancelled".to_string(),
             }),
@@ -3044,7 +4083,7 @@ impl SessionManager {
 
         // Send but don't wait for response - notifications will stream back
         server
-            .send_request(id, &request)
+            .send_request_with_session(id, &request, Some(session.session_id.clone()))
             .ok_or_else(|| SandboxError::StreamError {
                 message: "failed to send turn/start request".to_string(),
             })?;
@@ -3080,6 +4119,338 @@ impl SessionManager {
         }
         Err(SandboxError::StreamError {
             message: "OpenCode agent modes unavailable".to_string(),
+        })
+    }
+
+    async fn fetch_claude_models(&self) -> Result<AgentModelsResponse, SandboxError> {
+        let started = Instant::now();
+        let credentials = self.extract_credentials().await?;
+        let Some(cred) = credentials.anthropic else {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "claude model fetch skipped (no anthropic credentials)"
+            );
+            return Ok(AgentModelsResponse {
+                models: Vec::new(),
+                default_model: None,
+            });
+        };
+
+        let headers = build_anthropic_headers(&cred)?;
+        let response = self
+            .http_client
+            .get(ANTHROPIC_MODELS_URL)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|err| SandboxError::StreamError {
+                message: err.to_string(),
+            })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            if matches!(cred.auth_type, AuthType::Oauth) {
+                tracing::warn!(
+                    status = %status,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "Anthropic model list rejected OAuth credentials; using Claude OAuth fallback models"
+                );
+                return Ok(claude_fallback_models());
+            }
+            return Err(SandboxError::StreamError {
+                message: format!("Anthropic models request failed {status}: {body}"),
+            });
+        }
+
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|err| SandboxError::StreamError {
+                message: err.to_string(),
+            })?;
+        let data = value
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut models = Vec::new();
+        let mut default_model: Option<String> = None;
+        let mut default_created: Option<String> = None;
+        for item in data {
+            let Some(id) = item.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let name = item
+                .get("display_name")
+                .and_then(Value::as_str)
+                .map(|value| value.to_string());
+            let created = item
+                .get("created_at")
+                .and_then(Value::as_str)
+                .map(|value| value.to_string());
+            if let Some(created) = created.as_ref() {
+                let should_update = match default_created.as_deref() {
+                    Some(current) => created.as_str() > current,
+                    None => true,
+                };
+                if should_update {
+                    default_created = Some(created.clone());
+                    default_model = Some(id.to_string());
+                }
+            }
+            models.push(AgentModelInfo {
+                id: id.to_string(),
+                name,
+                variants: None,
+                default_variant: None,
+            });
+        }
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        if default_model.is_none() {
+            default_model = models.first().map(|model| model.id.clone());
+        }
+
+        if models.is_empty() && matches!(cred.auth_type, AuthType::Oauth) {
+            tracing::warn!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "Anthropic model list was empty for OAuth credentials; using Claude OAuth fallback models"
+            );
+            return Ok(claude_fallback_models());
+        }
+
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            model_count = models.len(),
+            has_default = default_model.is_some(),
+            "claude model fetch completed"
+        );
+        Ok(AgentModelsResponse {
+            models,
+            default_model,
+        })
+    }
+
+    async fn fetch_codex_models(self: &Arc<Self>) -> Result<AgentModelsResponse, SandboxError> {
+        let started = Instant::now();
+        let server = self.ensure_codex_server().await?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "codex model fetch server ready"
+        );
+        let mut models: Vec<AgentModelInfo> = Vec::new();
+        let mut default_model: Option<String> = None;
+        let mut seen = HashSet::new();
+        let mut cursor: Option<String> = None;
+        let mut pages: usize = 0;
+
+        loop {
+            let id = server.next_request_id();
+            let page_started = Instant::now();
+            let request = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "model/list",
+                "params": {
+                    "cursor": cursor,
+                    "limit": null
+                }
+            });
+            let rx =
+                server
+                    .send_request(id, &request)
+                    .ok_or_else(|| SandboxError::StreamError {
+                        message: "failed to send model/list request".to_string(),
+                    })?;
+
+            let result =
+                tokio::time::timeout(Duration::from_secs(CODEX_MODEL_LIST_TIMEOUT_SECS), rx).await;
+            let value = match result {
+                Ok(Ok(CodexRequestResult::Response(value))) => value,
+                Ok(Ok(CodexRequestResult::Error(error))) => {
+                    tracing::warn!(
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        page = pages + 1,
+                        error = %error.message,
+                        "codex model/list request failed"
+                    );
+                    return Err(codex_request_error_to_sandbox(
+                        "model/list request failed",
+                        &error,
+                    ));
+                }
+                Ok(Err(_)) => {
+                    tracing::warn!(
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        page = pages + 1,
+                        "codex model/list request cancelled"
+                    );
+                    return Err(SandboxError::StreamError {
+                        message: "model/list request cancelled".to_string(),
+                    });
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        page = pages + 1,
+                        timeout_secs = CODEX_MODEL_LIST_TIMEOUT_SECS,
+                        "codex model/list request timed out"
+                    );
+                    return Err(SandboxError::StreamError {
+                        message: "model/list request timed out".to_string(),
+                    });
+                }
+            };
+            pages += 1;
+            tracing::info!(
+                page = pages,
+                elapsed_ms = page_started.elapsed().as_millis() as u64,
+                total_elapsed_ms = started.elapsed().as_millis() as u64,
+                "codex model/list page fetched"
+            );
+
+            let data = value
+                .get("data")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+
+            for item in data {
+                let model_id = item
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.get("id").and_then(Value::as_str));
+                let Some(model_id) = model_id else {
+                    continue;
+                };
+                if !seen.insert(model_id.to_string()) {
+                    continue;
+                }
+
+                let name = item
+                    .get("displayName")
+                    .and_then(Value::as_str)
+                    .map(|value| value.to_string());
+
+                if default_model.is_none()
+                    && item
+                        .get("isDefault")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                {
+                    default_model = Some(model_id.to_string());
+                }
+
+                models.push(AgentModelInfo {
+                    id: model_id.to_string(),
+                    name,
+                    variants: None,
+                    default_variant: None,
+                });
+            }
+
+            let next_cursor = value
+                .get("nextCursor")
+                .and_then(Value::as_str)
+                .map(|value| value.to_string());
+            if next_cursor.is_none() {
+                break;
+            }
+            cursor = next_cursor;
+        }
+
+        models.sort_by(|a, b| a.id.cmp(&b.id));
+        if default_model.is_none() {
+            default_model = models.first().map(|model| model.id.clone());
+        }
+
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            page_count = pages,
+            model_count = models.len(),
+            has_default = default_model.is_some(),
+            "codex model fetch completed"
+        );
+        Ok(AgentModelsResponse {
+            models,
+            default_model,
+        })
+    }
+
+    async fn fetch_opencode_models(&self) -> Result<AgentModelsResponse, SandboxError> {
+        let started = Instant::now();
+        let base_url = self.ensure_opencode_server().await?;
+        let endpoints = [
+            format!("{base_url}/config/providers"),
+            format!("{base_url}/provider"),
+        ];
+        for url in endpoints {
+            let endpoint_started = Instant::now();
+            let response = self.http_client.get(&url).send().await;
+            let response = match response {
+                Ok(response) => response,
+                Err(err) => {
+                    tracing::warn!(
+                        url,
+                        elapsed_ms = endpoint_started.elapsed().as_millis() as u64,
+                        total_elapsed_ms = started.elapsed().as_millis() as u64,
+                        ?err,
+                        "opencode model endpoint request failed"
+                    );
+                    continue;
+                }
+            };
+            if !response.status().is_success() {
+                tracing::warn!(
+                    url,
+                    status = %response.status(),
+                    elapsed_ms = endpoint_started.elapsed().as_millis() as u64,
+                    total_elapsed_ms = started.elapsed().as_millis() as u64,
+                    "opencode model endpoint returned non-success status"
+                );
+                continue;
+            }
+            let value: Value = response
+                .json()
+                .await
+                .map_err(|err| SandboxError::StreamError {
+                    message: err.to_string(),
+                })?;
+            if let Some(models) = parse_opencode_models(&value) {
+                tracing::info!(
+                    url,
+                    elapsed_ms = endpoint_started.elapsed().as_millis() as u64,
+                    total_elapsed_ms = started.elapsed().as_millis() as u64,
+                    model_count = models.models.len(),
+                    has_default = models.default_model.is_some(),
+                    "opencode model fetch completed"
+                );
+                return Ok(models);
+            }
+            tracing::warn!(
+                url,
+                elapsed_ms = endpoint_started.elapsed().as_millis() as u64,
+                total_elapsed_ms = started.elapsed().as_millis() as u64,
+                "opencode model endpoint parse returned no models"
+            );
+        }
+        tracing::warn!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "opencode model fetch failed"
+        );
+        Err(SandboxError::StreamError {
+            message: "OpenCode models unavailable".to_string(),
+        })
+    }
+
+    async fn extract_credentials(&self) -> Result<ExtractedCredentials, SandboxError> {
+        tokio::task::spawn_blocking(move || {
+            let options = CredentialExtractionOptions::new();
+            extract_all_credentials(&options)
+        })
+        .await
+        .map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
         })
     }
 
@@ -3123,10 +4494,52 @@ impl SessionManager {
         })
     }
 
+    async fn apply_opencode_mcp(
+        &self,
+        mcp: &BTreeMap<String, McpServerConfig>,
+    ) -> Result<(), SandboxError> {
+        if mcp.is_empty() {
+            return Ok(());
+        }
+        let base_url = self.ensure_opencode_server().await?;
+        let url = format!("{base_url}/mcp");
+        let mut existing = HashSet::new();
+        if let Ok(response) = self.http_client.get(&url).send().await {
+            if response.status().is_success() {
+                if let Ok(value) = response.json::<Value>().await {
+                    if let Some(map) = value.as_object() {
+                        for key in map.keys() {
+                            existing.insert(key.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        for (name, config) in mcp {
+            if existing.contains(name) {
+                continue;
+            }
+            let config_value = opencode_mcp_config(config)?;
+            let body = json!({ "name": name, "config": config_value });
+            let response = self.http_client.post(&url).json(&body).send().await;
+            let response = response.map_err(|err| SandboxError::StreamError {
+                message: err.to_string(),
+            })?;
+            if !response.status().is_success() {
+                return Err(SandboxError::StreamError {
+                    message: format!("OpenCode MCP add failed: {}", response.status()),
+                });
+            }
+        }
+        Ok(())
+    }
+
     async fn send_opencode_prompt(
         &self,
         session: &SessionSnapshot,
         prompt: &str,
+        attachments: &[MessageAttachment],
     ) -> Result<(), SandboxError> {
         let base_url = self.ensure_opencode_server().await?;
         let session_id =
@@ -3137,9 +4550,13 @@ impl SessionManager {
                     message: "missing OpenCode session id".to_string(),
                 })?;
         let url = format!("{base_url}/session/{session_id}/prompt");
+        let mut parts = vec![json!({ "type": "text", "text": prompt })];
+        for attachment in attachments {
+            parts.push(opencode_file_part_input(attachment));
+        }
         let mut body = json!({
             "agent": session.agent_mode.clone(),
-            "parts": [{ "type": "text", "text": prompt }]
+            "parts": parts
         });
         if let Some(model) = session.model.as_deref() {
             if let Some((provider, model_id)) = model.split_once('/') {
@@ -3292,11 +4709,35 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
     if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(value) = value.to_str() {
             let value = value.trim();
-            if let Some(stripped) = value.strip_prefix("Bearer ") {
-                return Some(stripped.to_string());
-            }
-            if let Some(stripped) = value.strip_prefix("Token ") {
-                return Some(stripped.to_string());
+            if let Some((scheme, rest)) = value.split_once(' ') {
+                let scheme_lower = scheme.to_ascii_lowercase();
+                let rest = rest.trim();
+                match scheme_lower.as_str() {
+                    "bearer" | "token" => {
+                        return Some(rest.to_string());
+                    }
+                    "basic" => {
+                        let engines = [
+                            base64::engine::general_purpose::STANDARD,
+                            base64::engine::general_purpose::STANDARD_NO_PAD,
+                            base64::engine::general_purpose::URL_SAFE,
+                            base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                        ];
+                        for engine in engines {
+                            if let Ok(decoded) = engine.decode(rest) {
+                                if let Ok(decoded_str) = String::from_utf8(decoded) {
+                                    if let Some((_, password)) = decoded_str.split_once(':') {
+                                        return Some(password.to_string());
+                                    }
+                                    if !decoded_str.is_empty() {
+                                        return Some(decoded_str);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -3317,6 +4758,26 @@ pub struct AgentModeInfo {
     pub id: String,
     pub name: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelInfo {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variants: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_variant: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentModelsResponse {
+    pub models: Vec<AgentModelInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -3380,6 +4841,8 @@ pub struct ServerStatusInfo {
 pub struct AgentInfo {
     pub id: String,
     pub installed: bool,
+    /// Whether the agent's required provider credentials are available
+    pub credentials_available: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3408,6 +4871,14 @@ pub struct SessionInfo {
     pub native_session_id: Option<String>,
     pub ended: bool,
     pub event_count: u64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub directory: Option<String>,
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<BTreeMap<String, McpServerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<SkillsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -3419,6 +4890,232 @@ pub struct SessionListResponse {
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsPathQuery {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsEntriesQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsSessionQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsDeleteQuery {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recursive: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsUploadBatchQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "session_id")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FsEntryType {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsEntry {
+    pub name: String,
+    pub path: String,
+    pub entry_type: FsEntryType,
+    pub size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsStat {
+    pub path: String,
+    pub entry_type: FsEntryType,
+    pub size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsWriteResponse {
+    pub path: String,
+    pub bytes_written: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsMoveRequest {
+    pub from: String,
+    pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsMoveResponse {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsActionResponse {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsUploadBatchResponse {
+    pub paths: Vec<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsConfig {
+    pub sources: Vec<SkillSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ref")]
+    pub git_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subpath: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(untagged)]
+pub enum McpCommand {
+    Command(String),
+    CommandWithArgs(Vec<String>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum McpRemoteTransport {
+    Http,
+    Sse,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct McpOAuthConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(untagged)]
+pub enum McpOAuthConfigOrDisabled {
+    Config(McpOAuthConfig),
+    Disabled(bool),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum McpServerConfig {
+    #[serde(rename = "local", alias = "stdio")]
+    Local {
+        command: McpCommand,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            alias = "environment"
+        )]
+        env: Option<BTreeMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "timeoutMs",
+            alias = "timeout"
+        )]
+        #[schema(rename = "timeoutMs")]
+        timeout_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+    },
+    #[serde(rename = "remote", alias = "http")]
+    Remote {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        headers: Option<BTreeMap<String, String>>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "bearerTokenEnvVar",
+            alias = "bearerTokenEnvVar",
+            alias = "bearer_token_env_var"
+        )]
+        #[schema(rename = "bearerTokenEnvVar")]
+        bearer_token_env_var: Option<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "envHeaders",
+            alias = "envHttpHeaders",
+            alias = "env_http_headers"
+        )]
+        #[schema(rename = "envHeaders")]
+        env_headers: Option<BTreeMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth: Option<McpOAuthConfigOrDisabled>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "timeoutMs",
+            alias = "timeout"
+        )]
+        #[schema(rename = "timeoutMs")]
+        timeout_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transport: Option<McpRemoteTransport>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -3435,6 +5132,13 @@ pub struct CreateSessionRequest {
     pub variant: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub mcp: Option<BTreeMap<String, McpServerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<SkillsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -3451,6 +5155,18 @@ pub struct CreateSessionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct MessageRequest {
     pub message: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<MessageAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageAttachment {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, JsonSchema)]
@@ -3525,13 +5241,16 @@ impl std::str::FromStr for PermissionReply {
     request_body = AgentInstallRequest,
     responses(
         (status = 204, description = "Agent installed"),
-        (status = 400, body = ProblemDetails),
-        (status = 404, body = ProblemDetails),
-        (status = 500, body = ProblemDetails)
+        (status = 400, description = "Invalid request", body = ProblemDetails),
+        (status = 404, description = "Agent not found", body = ProblemDetails),
+        (status = 500, description = "Installation failed", body = ProblemDetails)
     ),
     params(("agent" = String, Path, description = "Agent id")),
     tag = "agents"
 )]
+/// Install Agent
+///
+/// Installs or updates a coding agent (e.g. claude, codex, opencode, amp).
 async fn install_agent(
     State(state): State<Arc<AppState>>,
     Path(agent): Path<String>,
@@ -3564,12 +5283,15 @@ async fn install_agent(
     get,
     path = "/v1/agents/{agent}/modes",
     responses(
-        (status = 200, body = AgentModesResponse),
-        (status = 400, body = ProblemDetails)
+        (status = 200, description = "Available modes", body = AgentModesResponse),
+        (status = 400, description = "Invalid request", body = ProblemDetails)
     ),
     params(("agent" = String, Path, description = "Agent id")),
     tag = "agents"
 )]
+/// List Agent Modes
+///
+/// Returns the available interaction modes for an agent.
 async fn get_agent_modes(
     State(state): State<Arc<AppState>>,
     Path(agent): Path<String>,
@@ -3577,6 +5299,28 @@ async fn get_agent_modes(
     let agent_id = parse_agent_id(&agent)?;
     let modes = state.session_manager.agent_modes(agent_id).await?;
     Ok(Json(AgentModesResponse { modes }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/agents/{agent}/models",
+    responses(
+        (status = 200, description = "Available models", body = AgentModelsResponse),
+        (status = 404, description = "Agent not found", body = ProblemDetails)
+    ),
+    params(("agent" = String, Path, description = "Agent id")),
+    tag = "agents"
+)]
+/// List Agent Models
+///
+/// Returns the available LLM models for an agent.
+async fn get_agent_models(
+    State(state): State<Arc<AppState>>,
+    Path(agent): Path<String>,
+) -> Result<Json<AgentModelsResponse>, ApiError> {
+    let agent_id = parse_agent_id(&agent)?;
+    let models = state.session_manager.agent_models(agent_id).await?;
+    Ok(Json(models))
 }
 
 const SERVER_INFO: &str = "\
@@ -3600,9 +5344,12 @@ async fn not_found() -> (StatusCode, String) {
 #[utoipa::path(
     get,
     path = "/v1/health",
-    responses((status = 200, body = HealthResponse)),
+    responses((status = 200, description = "Server is healthy", body = HealthResponse)),
     tag = "meta"
 )]
+/// Health Check
+///
+/// Returns the server health status.
 async fn get_health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
@@ -3612,9 +5359,12 @@ async fn get_health() -> Json<HealthResponse> {
 #[utoipa::path(
     get,
     path = "/v1/agents",
-    responses((status = 200, body = AgentListResponse)),
+    responses((status = 200, description = "List of available agents", body = AgentListResponse)),
     tag = "agents"
 )]
+/// List Agents
+///
+/// Returns all available coding agents and their installation status.
 async fn list_agents(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<AgentListResponse>, ApiError> {
@@ -3623,6 +5373,10 @@ async fn list_agents(
 
     let agents =
         tokio::task::spawn_blocking(move || {
+            let credentials = extract_all_credentials(&CredentialExtractionOptions::new());
+            let has_anthropic = credentials.anthropic.is_some();
+            let has_openai = credentials.openai.is_some();
+
             all_agents()
                 .into_iter()
                 .map(|agent_id| {
@@ -3630,6 +5384,13 @@ async fn list_agents(
                     let version = manager.version(agent_id).ok().flatten();
                     let path = manager.resolve_binary(agent_id).ok();
                     let capabilities = agent_capabilities_for(agent_id);
+
+                    let credentials_available = match agent_id {
+                        AgentId::Claude | AgentId::Amp => has_anthropic,
+                        AgentId::Codex => has_openai,
+                        AgentId::Opencode => has_anthropic || has_openai,
+                        AgentId::Mock => true,
+                    };
 
                     // Add server_status for agents with shared processes
                     let server_status =
@@ -3650,6 +5411,7 @@ async fn list_agents(
                     AgentInfo {
                         id: agent_id.as_str().to_string(),
                         installed,
+                        credentials_available,
                         version,
                         path: path.map(|path| path.to_string_lossy().to_string()),
                         capabilities,
@@ -3669,9 +5431,12 @@ async fn list_agents(
 #[utoipa::path(
     get,
     path = "/v1/sessions",
-    responses((status = 200, body = SessionListResponse)),
+    responses((status = 200, description = "List of active sessions", body = SessionListResponse)),
     tag = "sessions"
 )]
+/// List Sessions
+///
+/// Returns all active sessions.
 async fn list_sessions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SessionListResponse>, ApiError> {
@@ -3684,13 +5449,16 @@ async fn list_sessions(
     path = "/v1/sessions/{session_id}",
     request_body = CreateSessionRequest,
     responses(
-        (status = 200, body = CreateSessionResponse),
-        (status = 400, body = ProblemDetails),
-        (status = 409, body = ProblemDetails)
+        (status = 200, description = "Session created", body = CreateSessionResponse),
+        (status = 400, description = "Invalid request", body = ProblemDetails),
+        (status = 409, description = "Session already exists", body = ProblemDetails)
     ),
     params(("session_id" = String, Path, description = "Client session id")),
     tag = "sessions"
 )]
+/// Create Session
+///
+/// Creates a new agent session with the given configuration.
 async fn create_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -3709,11 +5477,14 @@ async fn create_session(
     request_body = MessageRequest,
     responses(
         (status = 204, description = "Message accepted"),
-        (status = 404, body = ProblemDetails)
+        (status = 404, description = "Session not found", body = ProblemDetails)
     ),
     params(("session_id" = String, Path, description = "Session id")),
     tag = "sessions"
 )]
+/// Send Message
+///
+/// Sends a message to a session and returns immediately.
 async fn post_message(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -3721,7 +5492,7 @@ async fn post_message(
 ) -> Result<StatusCode, ApiError> {
     state
         .session_manager
-        .send_message(session_id, request.message)
+        .send_message(session_id, request.message, request.attachments)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -3736,10 +5507,13 @@ async fn post_message(
     ),
     responses(
         (status = 200, description = "SSE event stream"),
-        (status = 404, body = ProblemDetails)
+        (status = 404, description = "Session not found", body = ProblemDetails)
     ),
     tag = "sessions"
 )]
+/// Send Message (Streaming)
+///
+/// Sends a message and returns an SSE event stream of the agent's response.
 async fn post_message_stream(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -3753,7 +5527,7 @@ async fn post_message_stream(
         .await?;
     state
         .session_manager
-        .send_message(session_id, request.message)
+        .send_message(session_id, request.message, request.attachments)
         .await?;
     let stream = stream_turn_events(subscription, snapshot.agent, include_raw);
     Ok(Sse::new(stream))
@@ -3765,10 +5539,13 @@ async fn post_message_stream(
     params(("session_id" = String, Path, description = "Session id")),
     responses(
         (status = 204, description = "Session terminated"),
-        (status = 404, body = ProblemDetails)
+        (status = 404, description = "Session not found", body = ProblemDetails)
     ),
     tag = "sessions"
 )]
+/// Terminate Session
+///
+/// Terminates a running session and cleans up resources.
 async fn terminate_session(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -3787,11 +5564,14 @@ async fn terminate_session(
         ("include_raw" = Option<bool>, Query, description = "Include raw provider payloads")
     ),
     responses(
-        (status = 200, body = EventsResponse),
-        (status = 404, body = ProblemDetails)
+        (status = 200, description = "Session events", body = EventsResponse),
+        (status = 404, description = "Session not found", body = ProblemDetails)
     ),
     tag = "sessions"
 )]
+/// Get Events
+///
+/// Returns session events with optional offset-based pagination.
 async fn get_events(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -3821,6 +5601,9 @@ async fn get_events(
     responses((status = 200, description = "SSE event stream")),
     tag = "sessions"
 )]
+/// Subscribe to Events (SSE)
+///
+/// Opens an SSE stream for real-time session events.
 async fn get_events_sse(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -3864,7 +5647,7 @@ async fn get_events_sse(
     request_body = QuestionReplyRequest,
     responses(
         (status = 204, description = "Question answered"),
-        (status = 404, body = ProblemDetails)
+        (status = 404, description = "Session or question not found", body = ProblemDetails)
     ),
     params(
         ("session_id" = String, Path, description = "Session id"),
@@ -3872,6 +5655,9 @@ async fn get_events_sse(
     ),
     tag = "sessions"
 )]
+/// Reply to Question
+///
+/// Replies to a human-in-the-loop question from the agent.
 async fn reply_question(
     State(state): State<Arc<AppState>>,
     Path((session_id, question_id)): Path<(String, String)>,
@@ -3889,7 +5675,7 @@ async fn reply_question(
     path = "/v1/sessions/{session_id}/questions/{question_id}/reject",
     responses(
         (status = 204, description = "Question rejected"),
-        (status = 404, body = ProblemDetails)
+        (status = 404, description = "Session or question not found", body = ProblemDetails)
     ),
     params(
         ("session_id" = String, Path, description = "Session id"),
@@ -3897,6 +5683,9 @@ async fn reply_question(
     ),
     tag = "sessions"
 )]
+/// Reject Question
+///
+/// Rejects a human-in-the-loop question from the agent.
 async fn reject_question(
     State(state): State<Arc<AppState>>,
     Path((session_id, question_id)): Path<(String, String)>,
@@ -3914,7 +5703,7 @@ async fn reject_question(
     request_body = PermissionReplyRequest,
     responses(
         (status = 204, description = "Permission reply accepted"),
-        (status = 404, body = ProblemDetails)
+        (status = 404, description = "Session or permission not found", body = ProblemDetails)
     ),
     params(
         ("session_id" = String, Path, description = "Session id"),
@@ -3922,6 +5711,9 @@ async fn reject_question(
     ),
     tag = "sessions"
 )]
+/// Reply to Permission
+///
+/// Approves or denies a permission request from the agent.
 async fn reply_permission(
     State(state): State<Arc<AppState>>,
     Path((session_id, permission_id)): Path<(String, String)>,
@@ -3932,6 +5724,342 @@ async fn reply_permission(
         .reply_permission(&session_id, &permission_id, request.reply)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/fs/entries",
+    params(
+        ("path" = Option<String>, Query, description = "Path to list (relative or absolute)"),
+        ("session_id" = Option<String>, Query, description = "Session id for relative paths")
+    ),
+    responses((status = 200, description = "Directory listing", body = Vec<FsEntry>)),
+    tag = "fs"
+)]
+/// List Directory
+///
+/// Lists files and directories at the given path.
+async fn fs_entries(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FsEntriesQuery>,
+) -> Result<Json<Vec<FsEntry>>, ApiError> {
+    let path = query.path.unwrap_or_else(|| ".".to_string());
+    let target = resolve_fs_path(&state, query.session_id.as_deref(), &path).await?;
+    let metadata = fs::metadata(&target).map_err(|err| map_fs_error(&target, err))?;
+    if !metadata.is_dir() {
+        return Err(SandboxError::InvalidRequest {
+            message: format!("path is not a directory: {}", target.display()),
+        }
+        .into());
+    }
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&target).map_err(|err| map_fs_error(&target, err))? {
+        let entry = entry.map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+        let path = entry.path();
+        let metadata = entry.metadata().map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+        let entry_type = if metadata.is_dir() {
+            FsEntryType::Directory
+        } else {
+            FsEntryType::File
+        };
+        let modified = metadata.modified().ok().and_then(|time| {
+            chrono::DateTime::<chrono::Utc>::from(time)
+                .to_rfc3339()
+                .into()
+        });
+        entries.push(FsEntry {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: path.to_string_lossy().to_string(),
+            entry_type,
+            size: metadata.len(),
+            modified,
+        });
+    }
+    Ok(Json(entries))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/fs/file",
+    params(
+        ("path" = String, Query, description = "File path (relative or absolute)"),
+        ("session_id" = Option<String>, Query, description = "Session id for relative paths")
+    ),
+    responses((status = 200, description = "File content", body = Vec<u8>)),
+    tag = "fs"
+)]
+/// Read File
+///
+/// Reads the raw bytes of a file.
+async fn fs_read_file(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FsPathQuery>,
+) -> Result<Response, ApiError> {
+    let target = resolve_fs_path(&state, query.session_id.as_deref(), &query.path).await?;
+    let metadata = fs::metadata(&target).map_err(|err| map_fs_error(&target, err))?;
+    if !metadata.is_file() {
+        return Err(SandboxError::InvalidRequest {
+            message: format!("path is not a file: {}", target.display()),
+        }
+        .into());
+    }
+    let bytes = fs::read(&target).map_err(|err| map_fs_error(&target, err))?;
+    Ok((
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        Bytes::from(bytes),
+    )
+        .into_response())
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/fs/file",
+    request_body = Vec<u8>,
+    params(
+        ("path" = String, Query, description = "File path (relative or absolute)"),
+        ("session_id" = Option<String>, Query, description = "Session id for relative paths")
+    ),
+    responses((status = 200, description = "Write result", body = FsWriteResponse)),
+    tag = "fs"
+)]
+/// Write File
+///
+/// Writes raw bytes to a file, creating it if it doesn't exist.
+async fn fs_write_file(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FsPathQuery>,
+    body: Bytes,
+) -> Result<Json<FsWriteResponse>, ApiError> {
+    let target = resolve_fs_path(&state, query.session_id.as_deref(), &query.path).await?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|err| map_fs_error(parent, err))?;
+    }
+    fs::write(&target, &body).map_err(|err| map_fs_error(&target, err))?;
+    Ok(Json(FsWriteResponse {
+        path: target.to_string_lossy().to_string(),
+        bytes_written: body.len() as u64,
+    }))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/fs/entry",
+    params(
+        ("path" = String, Query, description = "File or directory path"),
+        ("session_id" = Option<String>, Query, description = "Session id for relative paths"),
+        ("recursive" = Option<bool>, Query, description = "Delete directories recursively")
+    ),
+    responses((status = 200, description = "Delete result", body = FsActionResponse)),
+    tag = "fs"
+)]
+/// Delete Entry
+///
+/// Deletes a file or directory.
+async fn fs_delete_entry(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FsDeleteQuery>,
+) -> Result<Json<FsActionResponse>, ApiError> {
+    let target = resolve_fs_path(&state, query.session_id.as_deref(), &query.path).await?;
+    let metadata = fs::metadata(&target).map_err(|err| map_fs_error(&target, err))?;
+    if metadata.is_dir() {
+        if query.recursive.unwrap_or(false) {
+            fs::remove_dir_all(&target).map_err(|err| map_fs_error(&target, err))?;
+        } else {
+            fs::remove_dir(&target).map_err(|err| map_fs_error(&target, err))?;
+        }
+    } else {
+        fs::remove_file(&target).map_err(|err| map_fs_error(&target, err))?;
+    }
+    Ok(Json(FsActionResponse {
+        path: target.to_string_lossy().to_string(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/fs/mkdir",
+    params(
+        ("path" = String, Query, description = "Directory path to create"),
+        ("session_id" = Option<String>, Query, description = "Session id for relative paths")
+    ),
+    responses((status = 200, description = "Directory created", body = FsActionResponse)),
+    tag = "fs"
+)]
+/// Create Directory
+///
+/// Creates a directory, including any missing parent directories.
+async fn fs_mkdir(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FsPathQuery>,
+) -> Result<Json<FsActionResponse>, ApiError> {
+    let target = resolve_fs_path(&state, query.session_id.as_deref(), &query.path).await?;
+    fs::create_dir_all(&target).map_err(|err| map_fs_error(&target, err))?;
+    Ok(Json(FsActionResponse {
+        path: target.to_string_lossy().to_string(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/fs/move",
+    request_body = FsMoveRequest,
+    params(("session_id" = Option<String>, Query, description = "Session id for relative paths")),
+    responses((status = 200, description = "Move result", body = FsMoveResponse)),
+    tag = "fs"
+)]
+/// Move Entry
+///
+/// Moves or renames a file or directory.
+async fn fs_move(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FsSessionQuery>,
+    Json(request): Json<FsMoveRequest>,
+) -> Result<Json<FsMoveResponse>, ApiError> {
+    let session_id = query.session_id.as_deref();
+    let from = resolve_fs_path(&state, session_id, &request.from).await?;
+    let to = resolve_fs_path(&state, session_id, &request.to).await?;
+    if to.exists() {
+        if request.overwrite.unwrap_or(false) {
+            let metadata = fs::metadata(&to).map_err(|err| map_fs_error(&to, err))?;
+            if metadata.is_dir() {
+                fs::remove_dir_all(&to).map_err(|err| map_fs_error(&to, err))?;
+            } else {
+                fs::remove_file(&to).map_err(|err| map_fs_error(&to, err))?;
+            }
+        } else {
+            return Err(SandboxError::InvalidRequest {
+                message: format!("destination already exists: {}", to.display()),
+            }
+            .into());
+        }
+    }
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).map_err(|err| map_fs_error(parent, err))?;
+    }
+    fs::rename(&from, &to).map_err(|err| map_fs_error(&from, err))?;
+    Ok(Json(FsMoveResponse {
+        from: from.to_string_lossy().to_string(),
+        to: to.to_string_lossy().to_string(),
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/fs/stat",
+    params(
+        ("path" = String, Query, description = "Path to stat"),
+        ("session_id" = Option<String>, Query, description = "Session id for relative paths")
+    ),
+    responses((status = 200, description = "File metadata", body = FsStat)),
+    tag = "fs"
+)]
+/// Get File Info
+///
+/// Returns metadata (size, timestamps, type) for a path.
+async fn fs_stat(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FsPathQuery>,
+) -> Result<Json<FsStat>, ApiError> {
+    let target = resolve_fs_path(&state, query.session_id.as_deref(), &query.path).await?;
+    let metadata = fs::metadata(&target).map_err(|err| map_fs_error(&target, err))?;
+    let entry_type = if metadata.is_dir() {
+        FsEntryType::Directory
+    } else {
+        FsEntryType::File
+    };
+    let modified = metadata.modified().ok().and_then(|time| {
+        chrono::DateTime::<chrono::Utc>::from(time)
+            .to_rfc3339()
+            .into()
+    });
+    Ok(Json(FsStat {
+        path: target.to_string_lossy().to_string(),
+        entry_type,
+        size: metadata.len(),
+        modified,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/fs/upload-batch",
+    request_body = Vec<u8>,
+    params(
+        ("path" = Option<String>, Query, description = "Destination directory for extraction"),
+        ("session_id" = Option<String>, Query, description = "Session id for relative paths")
+    ),
+    responses((status = 200, description = "Upload result", body = FsUploadBatchResponse)),
+    tag = "fs"
+)]
+/// Upload Files
+///
+/// Uploads a tar.gz archive and extracts it to the destination directory.
+async fn fs_upload_batch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<FsUploadBatchQuery>,
+    body: Bytes,
+) -> Result<Json<FsUploadBatchResponse>, ApiError> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if !content_type.starts_with("application/x-tar") {
+        return Err(SandboxError::InvalidRequest {
+            message: "content-type must be application/x-tar".to_string(),
+        }
+        .into());
+    }
+    let path = query.path.unwrap_or_else(|| ".".to_string());
+    let base = resolve_fs_path(&state, query.session_id.as_deref(), &path).await?;
+    fs::create_dir_all(&base).map_err(|err| map_fs_error(&base, err))?;
+
+    let mut archive = Archive::new(Cursor::new(body));
+    let mut extracted = Vec::new();
+    let mut truncated = false;
+    for entry in archive.entries().map_err(|err| SandboxError::StreamError {
+        message: err.to_string(),
+    })? {
+        let mut entry = entry.map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+        let entry_path = entry.path().map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+        let clean_path = sanitize_relative_path(&entry_path)?;
+        if clean_path.as_os_str().is_empty() {
+            continue;
+        }
+        let dest = base.join(&clean_path);
+        if !dest.starts_with(&base) {
+            return Err(SandboxError::InvalidRequest {
+                message: format!("tar entry escapes destination: {}", entry_path.display()),
+            }
+            .into());
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|err| map_fs_error(parent, err))?;
+        }
+        entry
+            .unpack(&dest)
+            .map_err(|err| SandboxError::StreamError {
+                message: err.to_string(),
+            })?;
+        if extracted.len() < 1024 {
+            extracted.push(dest.to_string_lossy().to_string());
+        } else {
+            truncated = true;
+        }
+    }
+
+    Ok(Json(FsUploadBatchResponse {
+        paths: extracted,
+        truncated,
+    }))
 }
 
 fn all_agents() -> [AgentId; 6] {
@@ -3958,6 +6086,10 @@ fn agent_supports_item_started(agent: AgentId) -> bool {
     agent_capabilities_for(agent).item_started
 }
 
+fn agent_emits_turn_started(agent: AgentId) -> bool {
+    matches!(agent, AgentId::Codex | AgentId::Opencode)
+}
+
 fn agent_capabilities_for(agent: AgentId) -> AgentCapabilities {
     match agent {
         // Claude CLI supports tool calls/results and permission prompts via the SDK control protocol,
@@ -3977,7 +6109,7 @@ fn agent_capabilities_for(agent: AgentId) -> AgentCapabilities {
             status: false,
             command_execution: false,
             file_changes: false,
-            mcp_tools: false,
+            mcp_tools: true,
             streaming_deltas: true,
             item_started: false,
             shared_process: false, // per-turn subprocess with --resume
@@ -4014,10 +6146,10 @@ fn agent_capabilities_for(agent: AgentId) -> AgentCapabilities {
             session_lifecycle: true,
             error_events: true,
             reasoning: false,
-            status: true,
+            status: false,
             command_execution: false,
             file_changes: false,
-            mcp_tools: false,
+            mcp_tools: true,
             streaming_deltas: true,
             item_started: true,
             shared_process: true, // shared HTTP server
@@ -4037,7 +6169,7 @@ fn agent_capabilities_for(agent: AgentId) -> AgentCapabilities {
             status: false,
             command_execution: false,
             file_changes: false,
-            mcp_tools: false,
+            mcp_tools: true,
             streaming_deltas: false,
             item_started: false,
             shared_process: false, // per-turn subprocess with --continue
@@ -4176,6 +6308,100 @@ fn agent_modes_for(agent: AgentId) -> Vec<AgentModeInfo> {
     }
 }
 
+fn amp_models_response() -> AgentModelsResponse {
+    let models = vec![AgentModelInfo {
+        id: "amp-default".to_string(),
+        name: Some("Amp Default".to_string()),
+        variants: None,
+        default_variant: None,
+    }];
+    AgentModelsResponse {
+        models,
+        default_model: Some("amp-default".to_string()),
+    }
+}
+
+fn mock_models_response() -> AgentModelsResponse {
+    AgentModelsResponse {
+        models: vec![AgentModelInfo {
+            id: "mock".to_string(),
+            name: Some("Mock".to_string()),
+            variants: None,
+            default_variant: None,
+        }],
+        default_model: Some("mock".to_string()),
+    }
+}
+
+fn should_cache_agent_models(agent: AgentId, response: &AgentModelsResponse) -> bool {
+    if agent == AgentId::Opencode && response.models.is_empty() {
+        return false;
+    }
+    true
+}
+
+fn parse_opencode_models(value: &Value) -> Option<AgentModelsResponse> {
+    let providers = value
+        .get("providers")
+        .and_then(Value::as_array)
+        .or_else(|| value.get("all").and_then(Value::as_array))?;
+    let default_map = value
+        .get("default")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut models = Vec::new();
+    let mut provider_order = Vec::new();
+    for provider in providers {
+        let provider_id = provider.get("id").and_then(Value::as_str)?;
+        provider_order.push(provider_id.to_string());
+        let Some(model_map) = provider.get("models").and_then(Value::as_object) else {
+            continue;
+        };
+        for (key, model) in model_map {
+            let model_id = model
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or(key.as_str());
+            let name = model
+                .get("name")
+                .and_then(Value::as_str)
+                .map(|value| value.to_string());
+            let mut variants = model
+                .get("variants")
+                .and_then(Value::as_object)
+                .map(|map| map.keys().cloned().collect::<Vec<_>>());
+            if let Some(variants) = variants.as_mut() {
+                variants.sort();
+            }
+            models.push(AgentModelInfo {
+                id: format!("{provider_id}/{model_id}"),
+                name,
+                variants,
+                default_variant: None,
+            });
+        }
+    }
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut default_model = None;
+    for provider_id in provider_order {
+        if let Some(model_id) = default_map.get(&provider_id).and_then(Value::as_str) {
+            default_model = Some(format!("{provider_id}/{model_id}"));
+            break;
+        }
+    }
+    if default_model.is_none() {
+        default_model = models.first().map(|model| model.id.clone());
+    }
+
+    Some(AgentModelsResponse {
+        models,
+        default_model,
+    })
+}
+
 fn normalize_agent_mode(agent: AgentId, agent_mode: Option<&str>) -> Result<String, SandboxError> {
     let mode = agent_mode.unwrap_or("build");
     match agent {
@@ -4239,7 +6465,7 @@ fn normalize_permission_mode(
     agent: AgentId,
     permission_mode: Option<&str>,
 ) -> Result<String, SandboxError> {
-    let mode = match permission_mode.unwrap_or("default") {
+    let mut mode = match permission_mode.unwrap_or("default") {
         "default" | "plan" | "bypass" | "acceptEdits" => permission_mode.unwrap_or("default"),
         value => {
             return Err(SandboxError::InvalidRequest {
@@ -4248,6 +6474,10 @@ fn normalize_permission_mode(
             .into())
         }
     };
+    if agent != AgentId::Claude && mode == "acceptEdits" && agent != AgentId::Codex {
+        // acceptEdits is Claude-only unless explicitly handled; treat it as a no-op for other agents.
+        mode = "default";
+    }
     if agent == AgentId::Claude {
         // Claude refuses --dangerously-skip-permissions when running as root,
         // which is common in container environments (Docker, Daytona, E2B).
@@ -4266,7 +6496,7 @@ fn normalize_permission_mode(
     }
     let supported = match agent {
         AgentId::Claude => false,
-        AgentId::Codex => matches!(mode, "default" | "plan" | "bypass"),
+        AgentId::Codex => matches!(mode, "default" | "plan" | "bypass" | "acceptEdits"),
         AgentId::Amp => matches!(mode, "default" | "bypass"),
         AgentId::Opencode => matches!(mode, "default"),
         AgentId::Codebuff => matches!(mode, "default" | "bypass"),
@@ -4347,14 +6577,30 @@ fn build_spawn_options(
         }
     });
     if let Some(anthropic) = credentials.anthropic {
-        options
-            .env
-            .entry("ANTHROPIC_API_KEY".to_string())
-            .or_insert(anthropic.api_key.clone());
-        options
-            .env
-            .entry("CLAUDE_API_KEY".to_string())
-            .or_insert(anthropic.api_key);
+        let should_inject_claude_env = !(session.agent == AgentId::Claude
+            && anthropic.source == "claude-code"
+            && anthropic.provider == "anthropic");
+        if should_inject_claude_env {
+            if session.agent == AgentId::Claude && anthropic.auth_type == AuthType::Oauth {
+                options
+                    .env
+                    .entry("CLAUDE_CODE_OAUTH_TOKEN".to_string())
+                    .or_insert(anthropic.api_key.clone());
+                options
+                    .env
+                    .entry("ANTHROPIC_AUTH_TOKEN".to_string())
+                    .or_insert(anthropic.api_key);
+            } else {
+                options
+                    .env
+                    .entry("ANTHROPIC_API_KEY".to_string())
+                    .or_insert(anthropic.api_key.clone());
+                options
+                    .env
+                    .entry("CLAUDE_API_KEY".to_string())
+                    .or_insert(anthropic.api_key);
+            }
+        }
     }
     if let Some(openai) = credentials.openai {
         options
@@ -4367,6 +6613,1502 @@ fn build_spawn_options(
             .or_insert(openai.api_key);
     }
     options
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mutex to serialize tests that change the process-global CWD.
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn test_snapshot(agent: AgentId) -> SessionSnapshot {
+        SessionSnapshot {
+            session_id: "test-session".to_string(),
+            agent,
+            agent_mode: "build".to_string(),
+            permission_mode: "default".to_string(),
+            model: None,
+            variant: None,
+            native_session_id: None,
+        }
+    }
+
+    fn claude_code_api_key_credentials() -> ExtractedCredentials {
+        ExtractedCredentials {
+            anthropic: Some(ProviderCredentials {
+                api_key: "sk-ant-test".to_string(),
+                source: "claude-code".to_string(),
+                auth_type: AuthType::ApiKey,
+                provider: "anthropic".to_string(),
+            }),
+            openai: None,
+            other: HashMap::new(),
+        }
+    }
+
+    fn environment_oauth_credentials() -> ExtractedCredentials {
+        ExtractedCredentials {
+            anthropic: Some(ProviderCredentials {
+                api_key: "oauth-token".to_string(),
+                source: "environment".to_string(),
+                auth_type: AuthType::Oauth,
+                provider: "anthropic".to_string(),
+            }),
+            openai: None,
+            other: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn build_spawn_options_skips_claude_env_for_claude_code_source() {
+        let options = build_spawn_options(
+            &test_snapshot(AgentId::Claude),
+            "hello".to_string(),
+            claude_code_api_key_credentials(),
+        );
+
+        assert!(!options.env.contains_key("ANTHROPIC_API_KEY"));
+        assert!(!options.env.contains_key("CLAUDE_API_KEY"));
+    }
+
+    #[test]
+    fn build_spawn_options_keeps_anthropic_env_for_non_claude_agent() {
+        let options = build_spawn_options(
+            &test_snapshot(AgentId::Amp),
+            "hello".to_string(),
+            claude_code_api_key_credentials(),
+        );
+
+        assert_eq!(
+            options.env.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some("sk-ant-test")
+        );
+        assert_eq!(
+            options.env.get("CLAUDE_API_KEY").map(String::as_str),
+            Some("sk-ant-test")
+        );
+    }
+
+    #[test]
+    fn build_spawn_options_uses_oauth_env_for_claude_oauth_credentials() {
+        let options = build_spawn_options(
+            &test_snapshot(AgentId::Claude),
+            "hello".to_string(),
+            environment_oauth_credentials(),
+        );
+
+        assert_eq!(
+            options
+                .env
+                .get("CLAUDE_CODE_OAUTH_TOKEN")
+                .map(String::as_str),
+            Some("oauth-token")
+        );
+        assert_eq!(
+            options.env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+            Some("oauth-token")
+        );
+        assert!(!options.env.contains_key("ANTHROPIC_API_KEY"));
+        assert!(!options.env.contains_key("CLAUDE_API_KEY"));
+    }
+
+    #[test]
+    fn codex_unavailable_model_parser_handles_requested_model_message() {
+        let message = "The requested model 'gpt-5.3-codex' does not exist.";
+        assert_eq!(
+            codex_unavailable_model_from_message(message),
+            Some("gpt-5.3-codex".to_string())
+        );
+    }
+
+    #[test]
+    fn codex_unavailable_model_parser_handles_chatgpt_account_message() {
+        let message = "The 'gpt-5.3-codex-NOTREAL' model is not supported when using Codex with a ChatGPT account.";
+        assert_eq!(
+            codex_unavailable_model_from_message(message),
+            Some("gpt-5.3-codex-NOTREAL".to_string())
+        );
+    }
+
+    #[test]
+    fn codex_unavailable_model_parser_ignores_non_model_messages() {
+        let message = "Network error while contacting provider.";
+        assert_eq!(codex_unavailable_model_from_message(message), None);
+    }
+
+    #[test]
+    fn codex_unavailable_model_parser_ignores_non_unavailable_model_messages() {
+        let message = "using model 'gpt-5.3-codex' for this turn";
+        assert_eq!(codex_unavailable_model_from_message(message), None);
+    }
+
+    #[test]
+    fn codex_unavailable_model_parser_handles_embedded_json_detail_message() {
+        let message = "http 400 Bad Request: Some(\"{\\\"detail\\\":\\\"The 'gpt-5.3-codex-NOTREAL' model is not supported when using Codex with a ChatGPT account.\\\"}\")";
+        assert_eq!(
+            codex_unavailable_model_from_message(message),
+            Some("gpt-5.3-codex-NOTREAL".to_string())
+        );
+    }
+
+    // ── Skill source tests ──────────────────────────────────────────
+
+    fn make_skill_dir(base: &StdPath, name: &str) -> PathBuf {
+        let dir = base.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), format!("# {name}")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn skill_source_serde_github_roundtrip() {
+        let json = r#"{"type":"github","source":"rivet-dev/skills","skills":["sandbox-agent"],"ref":"main"}"#;
+        let source: SkillSource = serde_json::from_str(json).unwrap();
+        assert_eq!(source.source_type, "github");
+        assert_eq!(source.source, "rivet-dev/skills");
+        assert_eq!(source.skills, Some(vec!["sandbox-agent".to_string()]));
+        assert_eq!(source.git_ref, Some("main".to_string()));
+        assert_eq!(source.subpath, None);
+
+        let roundtrip = serde_json::to_string(&source).unwrap();
+        let back: SkillSource = serde_json::from_str(&roundtrip).unwrap();
+        assert_eq!(back.source_type, source.source_type);
+        assert_eq!(back.source, source.source);
+    }
+
+    #[test]
+    fn skill_source_serde_local_minimal() {
+        let json = r#"{"type":"local","source":"/workspace/my-skill"}"#;
+        let source: SkillSource = serde_json::from_str(json).unwrap();
+        assert_eq!(source.source_type, "local");
+        assert_eq!(source.source, "/workspace/my-skill");
+        assert_eq!(source.skills, None);
+        assert_eq!(source.git_ref, None);
+        assert_eq!(source.subpath, None);
+    }
+
+    #[test]
+    fn skills_config_serde_roundtrip() {
+        let json = r#"{"sources":[{"type":"github","source":"owner/repo"},{"type":"local","source":"/path"}]}"#;
+        let config: SkillsConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.sources.len(), 2);
+        assert_eq!(config.sources[0].source_type, "github");
+        assert_eq!(config.sources[1].source_type, "local");
+    }
+
+    #[test]
+    fn discover_skills_finds_root_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_skill_dir(tmp.path(), ".");
+        // SKILL.md is directly in the search dir
+        fs::write(tmp.path().join("SKILL.md"), "# root skill").unwrap();
+
+        let found = discover_skills_in_dir(tmp.path(), None).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], tmp.path().to_path_buf());
+    }
+
+    #[test]
+    fn discover_skills_finds_skills_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_skill_dir(&tmp.path().join("skills"), "alpha");
+        make_skill_dir(&tmp.path().join("skills"), "beta");
+
+        let found = discover_skills_in_dir(tmp.path(), None).unwrap();
+        let names: Vec<String> = found
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .collect();
+        assert!(names.contains(&"alpha".to_string()));
+        assert!(names.contains(&"beta".to_string()));
+    }
+
+    #[test]
+    fn discover_skills_finds_top_level_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_skill_dir(tmp.path(), "my-skill");
+
+        let found = discover_skills_in_dir(tmp.path(), None).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("my-skill"));
+    }
+
+    #[test]
+    fn discover_skills_deduplicates_children_and_skills_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Put a skill both at top level and in skills/ subdir with same name
+        make_skill_dir(tmp.path(), "dupe");
+        make_skill_dir(&tmp.path().join("skills"), "dupe");
+
+        let found = discover_skills_in_dir(tmp.path(), None).unwrap();
+        let dupe_count = found
+            .iter()
+            .filter(|p| p.file_name().map(|n| n == "dupe").unwrap_or(false))
+            .count();
+        // Both should be present since they're different paths
+        assert_eq!(dupe_count, 2);
+    }
+
+    #[test]
+    fn discover_skills_respects_subpath() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_skill_dir(&tmp.path().join("nested/skills"), "deep-skill");
+        // Also put a skill at root that should NOT be discovered
+        make_skill_dir(tmp.path(), "root-skill");
+
+        let found = discover_skills_in_dir(tmp.path(), Some("nested")).unwrap();
+        let names: Vec<String> = found
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .collect();
+        assert!(names.contains(&"deep-skill".to_string()));
+        assert!(!names.contains(&"root-skill".to_string()));
+    }
+
+    #[test]
+    fn discover_skills_empty_dir_returns_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let found = discover_skills_in_dir(tmp.path(), None).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn discover_skills_missing_subpath_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = discover_skills_in_dir(tmp.path(), Some("nonexistent"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn discover_skills_ignores_non_skill_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Create a directory without SKILL.md
+        fs::create_dir_all(tmp.path().join("not-a-skill")).unwrap();
+        fs::write(tmp.path().join("not-a-skill/README.md"), "# readme").unwrap();
+        // Create an actual skill
+        make_skill_dir(tmp.path(), "real-skill");
+
+        let found = discover_skills_in_dir(tmp.path(), None).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("real-skill"));
+    }
+
+    #[test]
+    fn resolve_skill_source_local_absolute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill = make_skill_dir(tmp.path(), "my-skill");
+        let source = SkillSource {
+            source_type: "local".to_string(),
+            source: skill.to_string_lossy().to_string(),
+            skills: None,
+            git_ref: None,
+            subpath: None,
+        };
+        let result = resolve_skill_source(&source, tmp.path()).unwrap();
+        assert_eq!(result, skill);
+    }
+
+    #[test]
+    fn resolve_skill_source_local_relative() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_skill_dir(tmp.path(), "my-skill");
+        let source = SkillSource {
+            source_type: "local".to_string(),
+            source: "my-skill".to_string(),
+            skills: None,
+            git_ref: None,
+            subpath: None,
+        };
+        let result = resolve_skill_source(&source, tmp.path()).unwrap();
+        assert_eq!(result, tmp.path().join("my-skill"));
+    }
+
+    #[test]
+    fn resolve_skill_source_local_missing_dir_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = SkillSource {
+            source_type: "local".to_string(),
+            source: "/nonexistent/path".to_string(),
+            skills: None,
+            git_ref: None,
+            subpath: None,
+        };
+        let result = resolve_skill_source(&source, tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_skill_source_unsupported_type_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = SkillSource {
+            source_type: "s3".to_string(),
+            source: "bucket/key".to_string(),
+            skills: None,
+            git_ref: None,
+            subpath: None,
+        };
+        let result = resolve_skill_source(&source, tmp.path());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("unsupported"),
+            "expected 'unsupported' in: {msg}"
+        );
+    }
+
+    #[test]
+    fn install_skill_sources_local_single() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        make_skill_dir(tmp.path(), "alpha");
+
+        let sources = vec![SkillSource {
+            source_type: "local".to_string(),
+            source: tmp.path().join("alpha").to_string_lossy().to_string(),
+            skills: None,
+            git_ref: None,
+            subpath: None,
+        }];
+
+        // Run from a temp working directory so symlinks go there
+        let work = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+        let result = install_skill_sources(&sources);
+        std::env::set_current_dir(prev).unwrap();
+
+        let dirs = result.unwrap();
+        assert_eq!(dirs.len(), 1);
+        // Verify symlinks were created
+        for root in SKILL_ROOTS {
+            let link = work.path().join(root).join("alpha");
+            assert!(link.exists(), "expected skill link at {}", link.display());
+            assert!(link.join("SKILL.md").exists());
+        }
+    }
+
+    #[test]
+    fn install_skill_sources_filters_by_name() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        // Repo-like layout with skills/ subdir containing two skills
+        make_skill_dir(&tmp.path().join("skills"), "wanted");
+        make_skill_dir(&tmp.path().join("skills"), "unwanted");
+
+        let sources = vec![SkillSource {
+            source_type: "local".to_string(),
+            source: tmp.path().to_string_lossy().to_string(),
+            skills: Some(vec!["wanted".to_string()]),
+            git_ref: None,
+            subpath: None,
+        }];
+
+        let work = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+        let result = install_skill_sources(&sources);
+        std::env::set_current_dir(prev).unwrap();
+
+        let dirs = result.unwrap();
+        assert_eq!(dirs.len(), 1);
+        assert!(dirs[0].ends_with("wanted"));
+    }
+
+    #[test]
+    fn install_skill_sources_errors_when_filter_matches_nothing() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        make_skill_dir(&tmp.path().join("skills"), "alpha");
+
+        let sources = vec![SkillSource {
+            source_type: "local".to_string(),
+            source: tmp.path().to_string_lossy().to_string(),
+            skills: Some(vec!["nonexistent".to_string()]),
+            git_ref: None,
+            subpath: None,
+        }];
+
+        let work = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+        let result = install_skill_sources(&sources);
+        std::env::set_current_dir(prev).unwrap();
+
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("no skills found"),
+            "expected 'no skills found' in: {msg}"
+        );
+    }
+
+    #[test]
+    fn install_skill_sources_multiple_sources() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        let tmp1 = tempfile::tempdir().unwrap();
+        let tmp2 = tempfile::tempdir().unwrap();
+        make_skill_dir(tmp1.path(), "skill-a");
+        make_skill_dir(tmp2.path(), "skill-b");
+
+        let sources = vec![
+            SkillSource {
+                source_type: "local".to_string(),
+                source: tmp1.path().join("skill-a").to_string_lossy().to_string(),
+                skills: None,
+                git_ref: None,
+                subpath: None,
+            },
+            SkillSource {
+                source_type: "local".to_string(),
+                source: tmp2.path().join("skill-b").to_string_lossy().to_string(),
+                skills: None,
+                git_ref: None,
+                subpath: None,
+            },
+        ];
+
+        let work = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+        let result = install_skill_sources(&sources);
+        std::env::set_current_dir(prev).unwrap();
+
+        let dirs = result.unwrap();
+        assert_eq!(dirs.len(), 2);
+    }
+
+    #[test]
+    fn install_skill_sources_deduplicates_same_skill() {
+        let _lock = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let skill = make_skill_dir(tmp.path(), "shared");
+        let path_str = skill.to_string_lossy().to_string();
+
+        let sources = vec![
+            SkillSource {
+                source_type: "local".to_string(),
+                source: path_str.clone(),
+                skills: None,
+                git_ref: None,
+                subpath: None,
+            },
+            SkillSource {
+                source_type: "local".to_string(),
+                source: path_str,
+                skills: None,
+                git_ref: None,
+                subpath: None,
+            },
+        ];
+
+        let work = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(work.path()).unwrap();
+        let result = install_skill_sources(&sources);
+        std::env::set_current_dir(prev).unwrap();
+
+        let dirs = result.unwrap();
+        assert_eq!(dirs.len(), 1, "duplicate skill should be deduplicated");
+    }
+
+    #[test]
+    fn ensure_skill_link_replaces_dangling_symlink() {
+        let work = tempfile::tempdir().unwrap();
+        let dest = work.path().join("test-link");
+
+        // Create a dangling symlink (target doesn't exist)
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/nonexistent/target", &dest).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir("/nonexistent/target", &dest).unwrap();
+
+        assert!(dest.symlink_metadata().is_ok(), "symlink should exist");
+        assert!(!dest.exists(), "symlink target should not exist (dangling)");
+
+        // Create a real skill directory as the new target
+        let skill = tempfile::tempdir().unwrap();
+        std::fs::write(skill.path().join("SKILL.md"), "# Test").unwrap();
+
+        // ensure_skill_link should replace the dangling symlink
+        let result = ensure_skill_link(skill.path(), &dest);
+        assert!(
+            result.is_ok(),
+            "should replace dangling symlink: {result:?}"
+        );
+        assert!(dest.exists(), "link should now point to valid target");
+        assert!(dest.join("SKILL.md").exists());
+    }
+
+    #[test]
+    fn download_github_zip_extracts_correctly() {
+        use std::io::Write;
+
+        // Build a zip in memory with GitHub-style prefix directory
+        let buf = Vec::new();
+        let cursor = std::io::Cursor::new(buf);
+        let mut zip_writer = zip::ZipWriter::new(cursor);
+
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+        // GitHub wraps all content under "owner-repo-sha/"
+        zip_writer
+            .add_directory("owner-repo-abc123/", options)
+            .unwrap();
+
+        zip_writer
+            .start_file("owner-repo-abc123/SKILL.md", options)
+            .unwrap();
+        zip_writer.write_all(b"# Test Skill").unwrap();
+
+        zip_writer
+            .add_directory("owner-repo-abc123/sub/", options)
+            .unwrap();
+
+        zip_writer
+            .start_file("owner-repo-abc123/sub/nested.txt", options)
+            .unwrap();
+        zip_writer.write_all(b"nested content").unwrap();
+
+        let zip_bytes = zip_writer.finish().unwrap().into_inner();
+
+        // Extract using the same logic as download_github_zip (minus HTTP)
+        let work = tempfile::tempdir().unwrap();
+        let dest = work.path().join("test-skill");
+
+        let reader = std::io::Cursor::new(&zip_bytes);
+        let mut archive = zip::ZipArchive::new(reader).unwrap();
+
+        // Detect prefix
+        let prefix = {
+            let first = archive.by_index(0).unwrap();
+            let name = first.name().to_string();
+            match name.find('/') {
+                Some(pos) => name[..=pos].to_string(),
+                None => String::new(),
+            }
+        };
+
+        fs::create_dir_all(&dest).unwrap();
+
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            let full_name = file.name().to_string();
+
+            let relative = if !prefix.is_empty() && full_name.starts_with(&prefix) {
+                &full_name[prefix.len()..]
+            } else {
+                &full_name
+            };
+
+            if relative.is_empty() {
+                continue;
+            }
+
+            let out_path = dest.join(relative);
+            if !out_path.starts_with(&dest) {
+                continue;
+            }
+
+            if file.is_dir() {
+                fs::create_dir_all(&out_path).unwrap();
+            } else {
+                if let Some(parent) = out_path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                let mut out_file = fs::File::create(&out_path).unwrap();
+                std::io::copy(&mut file, &mut out_file).unwrap();
+            }
+        }
+
+        // Verify files were extracted without the prefix directory
+        assert!(
+            dest.join("SKILL.md").exists(),
+            "SKILL.md should exist at root"
+        );
+        assert_eq!(
+            fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            "# Test Skill"
+        );
+        assert!(
+            dest.join("sub/nested.txt").exists(),
+            "nested file should exist"
+        );
+        assert_eq!(
+            fs::read_to_string(dest.join("sub/nested.txt")).unwrap(),
+            "nested content"
+        );
+        // Ensure no prefix directory leaked through
+        assert!(
+            !dest.join("owner-repo-abc123").exists(),
+            "prefix dir should be stripped"
+        );
+    }
+}
+
+fn install_skill_sources(sources: &[SkillSource]) -> Result<Vec<PathBuf>, SandboxError> {
+    let cwd = std::env::current_dir().map_err(|err| SandboxError::StreamError {
+        message: err.to_string(),
+    })?;
+    let mut skill_dirs = Vec::new();
+
+    for source in sources {
+        let base_dir = resolve_skill_source(source, &cwd)?;
+        let discovered = discover_skills_in_dir(&base_dir, source.subpath.as_deref())?;
+
+        let filtered: Vec<PathBuf> = if let Some(filter) = &source.skills {
+            discovered
+                .into_iter()
+                .filter(|p| {
+                    p.file_name()
+                        .map(|n| filter.iter().any(|f| f == n.to_string_lossy().as_ref()))
+                        .unwrap_or(false)
+                })
+                .collect()
+        } else {
+            discovered
+        };
+
+        if filtered.is_empty() {
+            let filter_msg = source
+                .skills
+                .as_ref()
+                .map(|f| format!(" (filter: {})", f.join(", ")))
+                .unwrap_or_default();
+            return Err(SandboxError::InvalidRequest {
+                message: format!(
+                    "no skills found in {} ({}){filter_msg}",
+                    source.source, source.source_type
+                ),
+            });
+        }
+
+        for skill_path in &filtered {
+            let canonical =
+                fs::canonicalize(skill_path).map_err(|err| SandboxError::StreamError {
+                    message: err.to_string(),
+                })?;
+            if !skill_dirs.contains(&canonical) {
+                skill_dirs.push(canonical.clone());
+            }
+            let skill_name = canonical
+                .file_name()
+                .ok_or_else(|| SandboxError::InvalidRequest {
+                    message: format!("invalid skill directory: {}", canonical.display()),
+                })?
+                .to_string_lossy()
+                .to_string();
+            for root in SKILL_ROOTS {
+                let dest = cwd.join(root).join(&skill_name);
+                ensure_skill_link(&canonical, &dest)?;
+            }
+        }
+    }
+
+    Ok(skill_dirs)
+}
+
+fn skills_cache_dir() -> Result<PathBuf, SandboxError> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| SandboxError::StreamError {
+            message: "cannot determine home directory".to_string(),
+        })?;
+    let cache = PathBuf::from(home).join(".sandbox-agent/skills-cache");
+    fs::create_dir_all(&cache).map_err(|err| SandboxError::StreamError {
+        message: format!("failed to create skills cache: {err}"),
+    })?;
+    Ok(cache)
+}
+
+fn download_github_zip(
+    owner_repo: &str,
+    cache_name: &str,
+    git_ref: Option<&str>,
+) -> Result<PathBuf, SandboxError> {
+    let cache = skills_cache_dir()?;
+    let dest = cache.join(cache_name);
+
+    // Remove existing cache dir if present (no .git state to preserve)
+    if dest.is_dir() {
+        fs::remove_dir_all(&dest).map_err(|err| SandboxError::StreamError {
+            message: format!("failed to remove old skills cache: {err}"),
+        })?;
+    }
+
+    let git_ref = git_ref.unwrap_or("HEAD");
+    let url = format!(
+        "https://api.github.com/repos/{}/zipball/{}",
+        owner_repo, git_ref
+    );
+
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .get(&url)
+        .header("User-Agent", "sandbox-agent")
+        .send()
+        .map_err(|err| SandboxError::StreamError {
+            message: format!("failed to download github zip for {owner_repo}: {err}"),
+        })?;
+
+    if !response.status().is_success() {
+        return Err(SandboxError::StreamError {
+            message: format!(
+                "github zip download failed for {owner_repo}: HTTP {}",
+                response.status()
+            ),
+        });
+    }
+
+    let bytes = response.bytes().map_err(|err| SandboxError::StreamError {
+        message: format!("failed to read github zip response: {err}"),
+    })?;
+
+    let reader = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(reader).map_err(|err| SandboxError::StreamError {
+        message: format!("failed to open github zip archive: {err}"),
+    })?;
+
+    // GitHub zipball wraps contents in a {owner}-{repo}-{sha}/ prefix directory.
+    // Detect this prefix from the first entry and strip it during extraction.
+    let prefix = {
+        let first = archive
+            .by_index(0)
+            .map_err(|err| SandboxError::StreamError {
+                message: format!("failed to read zip entry: {err}"),
+            })?;
+        let name = first.name().to_string();
+        // The first entry is typically the top-level directory itself (e.g. "owner-repo-sha/")
+        match name.find('/') {
+            Some(pos) => name[..=pos].to_string(),
+            None => String::new(),
+        }
+    };
+
+    fs::create_dir_all(&dest).map_err(|err| SandboxError::StreamError {
+        message: format!("failed to create skills cache dir: {err}"),
+    })?;
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|err| SandboxError::StreamError {
+                message: format!("failed to read zip entry: {err}"),
+            })?;
+
+        let full_name = file.name().to_string();
+
+        // Strip the GitHub prefix directory
+        let relative = if !prefix.is_empty() && full_name.starts_with(&prefix) {
+            &full_name[prefix.len()..]
+        } else {
+            &full_name
+        };
+
+        // Skip the prefix directory entry itself and empty paths
+        if relative.is_empty() {
+            continue;
+        }
+
+        let out_path = dest.join(relative);
+
+        // Prevent path traversal
+        if !out_path.starts_with(&dest) {
+            continue;
+        }
+
+        if file.is_dir() {
+            fs::create_dir_all(&out_path).map_err(|err| SandboxError::StreamError {
+                message: format!("failed to create directory: {err}"),
+            })?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent).map_err(|err| SandboxError::StreamError {
+                    message: format!("failed to create parent directory: {err}"),
+                })?;
+            }
+            let mut out_file =
+                fs::File::create(&out_path).map_err(|err| SandboxError::StreamError {
+                    message: format!("failed to create file: {err}"),
+                })?;
+            std::io::copy(&mut file, &mut out_file).map_err(|err| SandboxError::StreamError {
+                message: format!("failed to write file: {err}"),
+            })?;
+        }
+    }
+
+    Ok(dest)
+}
+
+fn clone_or_update_repo(
+    url: &str,
+    cache_name: &str,
+    git_ref: Option<&str>,
+) -> Result<PathBuf, SandboxError> {
+    let cache = skills_cache_dir()?;
+    let dest = cache.join(cache_name);
+
+    if dest.join(".git").is_dir() {
+        // Update existing clone
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(&dest).arg("pull").arg("--ff-only");
+        let output = cmd.output().map_err(|err| SandboxError::StreamError {
+            message: format!("git pull failed: {err}"),
+        })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("git pull failed for {cache_name}, re-cloning: {stderr}");
+            fs::remove_dir_all(&dest).map_err(|err| SandboxError::StreamError {
+                message: format!("failed to remove stale cache: {err}"),
+            })?;
+            return clone_or_update_repo(url, cache_name, git_ref);
+        }
+    } else {
+        // Fresh clone
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("clone").arg("--depth").arg("1");
+        if let Some(r) = git_ref {
+            cmd.arg("--branch").arg(r);
+        }
+        cmd.arg(url).arg(&dest);
+        let output = cmd.output().map_err(|err| SandboxError::StreamError {
+            message: format!("git clone failed: {err}"),
+        })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(SandboxError::StreamError {
+                message: format!("git clone failed for {url}: {stderr}"),
+            });
+        }
+    }
+
+    Ok(dest)
+}
+
+fn resolve_skill_source(source: &SkillSource, cwd: &StdPath) -> Result<PathBuf, SandboxError> {
+    match source.source_type.as_str() {
+        "github" => {
+            let cache_name = source.source.replace('/', "-");
+            download_github_zip(&source.source, &cache_name, source.git_ref.as_deref())
+        }
+        "git" => {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            source.source.hash(&mut hasher);
+            let hash = format!("{:016x}", hasher.finish());
+            clone_or_update_repo(&source.source, &hash, source.git_ref.as_deref())
+        }
+        "local" => {
+            let mut path = PathBuf::from(&source.source);
+            if path.is_relative() {
+                path = cwd.join(path);
+            }
+            if !path.is_dir() {
+                return Err(SandboxError::InvalidRequest {
+                    message: format!("local skill directory not found: {}", path.display()),
+                });
+            }
+            Ok(path)
+        }
+        other => Err(SandboxError::InvalidRequest {
+            message: format!("unsupported skill source type: {other}"),
+        }),
+    }
+}
+
+fn discover_skills_in_dir(
+    base: &StdPath,
+    subpath: Option<&str>,
+) -> Result<Vec<PathBuf>, SandboxError> {
+    let search_dir = if let Some(sub) = subpath {
+        base.join(sub)
+    } else {
+        base.to_path_buf()
+    };
+
+    if !search_dir.is_dir() {
+        return Err(SandboxError::InvalidRequest {
+            message: format!("skill search directory not found: {}", search_dir.display()),
+        });
+    }
+
+    let mut skills = Vec::new();
+
+    // Check if the search dir itself is a skill
+    if search_dir.join("SKILL.md").exists() {
+        skills.push(search_dir.clone());
+    }
+
+    // Check skills/ subdirectory
+    let skills_subdir = search_dir.join("skills");
+    if skills_subdir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&skills_subdir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join("SKILL.md").exists() {
+                    skills.push(path);
+                }
+            }
+        }
+    }
+
+    // Check immediate children of search dir (for repos with skills at top level)
+    if let Ok(entries) = fs::read_dir(&search_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.join("SKILL.md").exists() && !skills.contains(&path) {
+                skills.push(path);
+            }
+        }
+    }
+
+    Ok(skills)
+}
+
+fn ensure_skill_link(target: &StdPath, dest: &StdPath) -> Result<(), SandboxError> {
+    if dest.exists() {
+        if dest.is_dir() && dest.join("SKILL.md").exists() {
+            return Ok(());
+        }
+        if let Ok(link_target) = fs::read_link(dest) {
+            if link_target == target {
+                return Ok(());
+            }
+        }
+        return Err(SandboxError::InvalidRequest {
+            message: format!("skill path conflict: {} already exists", dest.display()),
+        });
+    }
+    // Remove dangling symlinks (exists() follows symlinks and returns false for dangling ones)
+    if dest.symlink_metadata().is_ok() {
+        let _ = fs::remove_file(dest);
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+    }
+    if let Err(err) = create_symlink_dir(target, dest) {
+        copy_dir_recursive(target, dest).map_err(|copy_err| SandboxError::StreamError {
+            message: format!("{err}; fallback copy failed: {copy_err}"),
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_symlink_dir(target: &StdPath, dest: &StdPath) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, dest)
+}
+
+#[cfg(windows)]
+fn create_symlink_dir(target: &StdPath, dest: &StdPath) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, dest)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn create_symlink_dir(_target: &StdPath, _dest: &StdPath) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "symlinks unsupported",
+    ))
+}
+
+fn copy_dir_recursive(src: &StdPath, dest: &StdPath) -> std::io::Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)?;
+        } else {
+            fs::copy(&src_path, &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_claude_mcp_config(mcp: &BTreeMap<String, McpServerConfig>) -> Result<(), SandboxError> {
+    let cwd = std::env::current_dir().map_err(|err| SandboxError::StreamError {
+        message: err.to_string(),
+    })?;
+    let path = cwd.join(".mcp.json");
+    let mut root = if path.exists() {
+        let text = fs::read_to_string(&path).map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+        serde_json::from_str::<Value>(&text).map_err(|err| SandboxError::InvalidRequest {
+            message: format!("invalid .mcp.json: {err}"),
+        })?
+    } else {
+        Value::Object(Map::new())
+    };
+    let Some(object) = root.as_object_mut() else {
+        return Err(SandboxError::InvalidRequest {
+            message: "invalid .mcp.json: expected object".to_string(),
+        });
+    };
+    let servers = object
+        .entry("mcpServers")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(server_map) = servers.as_object_mut() else {
+        return Err(SandboxError::InvalidRequest {
+            message: "invalid .mcp.json: mcpServers must be an object".to_string(),
+        });
+    };
+    for (name, config) in mcp {
+        server_map.insert(name.clone(), claude_mcp_entry(config)?);
+    }
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&root).map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?,
+    )
+    .map_err(|err| SandboxError::StreamError {
+        message: err.to_string(),
+    })?;
+    Ok(())
+}
+
+fn write_codex_mcp_config(mcp: &BTreeMap<String, McpServerConfig>) -> Result<(), SandboxError> {
+    let cwd = std::env::current_dir().map_err(|err| SandboxError::StreamError {
+        message: err.to_string(),
+    })?;
+    let path = cwd.join(".codex").join("config.toml");
+    let mut doc = if path.exists() {
+        let text = fs::read_to_string(&path).map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+        text.parse::<DocumentMut>()
+            .map_err(|err| SandboxError::InvalidRequest {
+                message: format!("invalid Codex config.toml: {err}"),
+            })?
+    } else {
+        DocumentMut::new()
+    };
+    let mcp_item = doc
+        .entry("mcp_servers")
+        .or_insert(Item::Table(Table::new()));
+    let mcp_table = mcp_item
+        .as_table_mut()
+        .ok_or_else(|| SandboxError::InvalidRequest {
+            message: "invalid Codex config.toml: mcp_servers must be a table".to_string(),
+        })?;
+    for (name, config) in mcp {
+        let table = codex_mcp_table(config)?;
+        mcp_table.insert(name, Item::Table(table));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+    }
+    fs::write(&path, doc.to_string()).map_err(|err| SandboxError::StreamError {
+        message: err.to_string(),
+    })?;
+    Ok(())
+}
+
+fn apply_amp_mcp_config(
+    agent_manager: &AgentManager,
+    mcp: &BTreeMap<String, McpServerConfig>,
+) -> Result<(), SandboxError> {
+    let path = agent_manager.resolve_binary(AgentId::Amp).map_err(|_| {
+        SandboxError::AgentNotInstalled {
+            agent: "amp".to_string(),
+        }
+    })?;
+    let cwd = std::env::current_dir().map_err(|err| SandboxError::StreamError {
+        message: err.to_string(),
+    })?;
+    for (name, config) in mcp {
+        let mut cmd = Command::new(&path);
+        cmd.current_dir(&cwd);
+        cmd.arg("mcp").arg("add").arg(name);
+        match config {
+            McpServerConfig::Local { command, args, .. } => {
+                let (cmd_name, cmd_args) = mcp_command_parts(command, args)?;
+                cmd.arg("--").arg(cmd_name).args(cmd_args);
+            }
+            McpServerConfig::Remote {
+                url,
+                headers,
+                bearer_token_env_var,
+                env_headers,
+                ..
+            } => {
+                let merged = merged_headers(
+                    headers.as_ref(),
+                    bearer_token_env_var.as_ref(),
+                    env_headers.as_ref(),
+                );
+                for (key, value) in merged {
+                    cmd.arg("--header").arg(format!("{key}: {value}"));
+                }
+                cmd.arg(url);
+            }
+        }
+        let output = cmd.output().map_err(|err| SandboxError::StreamError {
+            message: err.to_string(),
+        })?;
+        if !output.status.success() {
+            return Err(SandboxError::StreamError {
+                message: format!("amp mcp add failed for {name}: {}", output.status),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn opencode_mcp_config(config: &McpServerConfig) -> Result<Value, SandboxError> {
+    match config {
+        McpServerConfig::Local {
+            command,
+            args,
+            env,
+            enabled,
+            timeout_ms,
+            ..
+        } => {
+            let (cmd_name, cmd_args) = mcp_command_parts(command, args)?;
+            let mut map = Map::new();
+            map.insert("type".to_string(), Value::String("local".to_string()));
+            let mut command_parts = vec![Value::String(cmd_name)];
+            command_parts.extend(cmd_args.into_iter().map(Value::String));
+            map.insert("command".to_string(), Value::Array(command_parts));
+            if let Some(env) = env {
+                map.insert("environment".to_string(), json!(env));
+            }
+            if let Some(enabled) = enabled {
+                map.insert("enabled".to_string(), Value::Bool(*enabled));
+            }
+            if let Some(timeout) = timeout_ms {
+                map.insert(
+                    "timeout".to_string(),
+                    Value::Number(serde_json::Number::from(*timeout)),
+                );
+            }
+            Ok(Value::Object(map))
+        }
+        McpServerConfig::Remote {
+            url,
+            headers,
+            bearer_token_env_var,
+            env_headers,
+            oauth,
+            enabled,
+            timeout_ms,
+            ..
+        } => {
+            let mut map = Map::new();
+            map.insert("type".to_string(), Value::String("remote".to_string()));
+            map.insert("url".to_string(), Value::String(url.clone()));
+            let merged = merged_headers(
+                headers.as_ref(),
+                bearer_token_env_var.as_ref(),
+                env_headers.as_ref(),
+            );
+            if !merged.is_empty() {
+                map.insert("headers".to_string(), json!(merged));
+            }
+            if let Some(oauth) = oauth {
+                map.insert(
+                    "oauth".to_string(),
+                    serde_json::to_value(oauth).map_err(|err| SandboxError::StreamError {
+                        message: err.to_string(),
+                    })?,
+                );
+            }
+            if let Some(enabled) = enabled {
+                map.insert("enabled".to_string(), Value::Bool(*enabled));
+            }
+            if let Some(timeout) = timeout_ms {
+                map.insert(
+                    "timeout".to_string(),
+                    Value::Number(serde_json::Number::from(*timeout)),
+                );
+            }
+            Ok(Value::Object(map))
+        }
+    }
+}
+
+fn claude_mcp_entry(config: &McpServerConfig) -> Result<Value, SandboxError> {
+    match config {
+        McpServerConfig::Local {
+            command, args, env, ..
+        } => {
+            let (cmd_name, cmd_args) = mcp_command_parts(command, args)?;
+            let mut map = Map::new();
+            map.insert("command".to_string(), Value::String(cmd_name));
+            if !cmd_args.is_empty() {
+                map.insert(
+                    "args".to_string(),
+                    Value::Array(cmd_args.into_iter().map(Value::String).collect()),
+                );
+            }
+            if let Some(env) = env {
+                map.insert("env".to_string(), json!(env));
+            }
+            Ok(Value::Object(map))
+        }
+        McpServerConfig::Remote {
+            url,
+            headers,
+            bearer_token_env_var,
+            env_headers,
+            transport,
+            ..
+        } => {
+            let mut map = Map::new();
+            let transport = transport.clone().unwrap_or(McpRemoteTransport::Http);
+            map.insert(
+                "type".to_string(),
+                Value::String(
+                    match transport {
+                        McpRemoteTransport::Http => "http",
+                        McpRemoteTransport::Sse => "sse",
+                    }
+                    .to_string(),
+                ),
+            );
+            map.insert("url".to_string(), Value::String(url.clone()));
+            let merged = merged_headers(
+                headers.as_ref(),
+                bearer_token_env_var.as_ref(),
+                env_headers.as_ref(),
+            );
+            if !merged.is_empty() {
+                map.insert("headers".to_string(), json!(merged));
+            }
+            Ok(Value::Object(map))
+        }
+    }
+}
+
+fn codex_mcp_table(config: &McpServerConfig) -> Result<Table, SandboxError> {
+    let mut table = Table::new();
+    match config {
+        McpServerConfig::Local {
+            command,
+            args,
+            env,
+            enabled,
+            timeout_ms,
+            ..
+        } => {
+            let (cmd_name, cmd_args) = mcp_command_parts(command, args)?;
+            table.insert("command", value(cmd_name));
+            if !cmd_args.is_empty() {
+                let mut array = Array::new();
+                for arg in cmd_args {
+                    array.push(arg);
+                }
+                table.insert("args", value(array));
+            }
+            if let Some(env) = env {
+                let mut env_table = Table::new();
+                for (key, val) in env {
+                    env_table.insert(key, value(val.clone()));
+                }
+                table.insert("env", Item::Table(env_table));
+            }
+            if let Some(enabled) = enabled {
+                table.insert("enabled", value(*enabled));
+            }
+            if let Some(timeout) = timeout_ms {
+                let seconds = (*timeout + 999) / 1000;
+                table.insert("tool_timeout_sec", value(seconds as i64));
+            }
+        }
+        McpServerConfig::Remote {
+            url,
+            headers,
+            bearer_token_env_var,
+            env_headers,
+            enabled,
+            timeout_ms,
+            ..
+        } => {
+            table.insert("url", value(url.clone()));
+            if let Some(headers) = headers {
+                let mut header_table = Table::new();
+                for (key, val) in headers {
+                    header_table.insert(key, value(val.clone()));
+                }
+                table.insert("http_headers", Item::Table(header_table));
+            }
+            if let Some(env_headers) = env_headers {
+                let mut header_table = Table::new();
+                for (key, val) in env_headers {
+                    header_table.insert(key, value(val.clone()));
+                }
+                table.insert("env_http_headers", Item::Table(header_table));
+            }
+            if let Some(bearer) = bearer_token_env_var {
+                table.insert("bearer_token_env_var", value(bearer.clone()));
+            }
+            if let Some(enabled) = enabled {
+                table.insert("enabled", value(*enabled));
+            }
+            if let Some(timeout) = timeout_ms {
+                let seconds = (*timeout + 999) / 1000;
+                table.insert("tool_timeout_sec", value(seconds as i64));
+            }
+        }
+    }
+    Ok(table)
+}
+
+fn mcp_command_parts(
+    command: &McpCommand,
+    args: &[String],
+) -> Result<(String, Vec<String>), SandboxError> {
+    match command {
+        McpCommand::Command(value) => Ok((value.clone(), args.to_vec())),
+        McpCommand::CommandWithArgs(values) => {
+            if values.is_empty() {
+                return Err(SandboxError::InvalidRequest {
+                    message: "mcp command cannot be empty".to_string(),
+                });
+            }
+            let mut iter = values.iter();
+            let cmd = iter.next().map(|value| value.to_string()).ok_or_else(|| {
+                SandboxError::InvalidRequest {
+                    message: "mcp command cannot be empty".to_string(),
+                }
+            })?;
+            let mut cmd_args = iter.map(|value| value.to_string()).collect::<Vec<_>>();
+            cmd_args.extend(args.iter().cloned());
+            Ok((cmd, cmd_args))
+        }
+    }
+}
+
+fn merged_headers(
+    headers: Option<&BTreeMap<String, String>>,
+    bearer_token_env_var: Option<&String>,
+    env_headers: Option<&BTreeMap<String, String>>,
+) -> BTreeMap<String, String> {
+    let mut merged = headers.cloned().unwrap_or_default();
+    if let Some(env_var) = bearer_token_env_var {
+        merged
+            .entry("Authorization".to_string())
+            .or_insert_with(|| format!("Bearer ${env_var}"));
+    }
+    if let Some(env_headers) = env_headers {
+        for (key, value) in env_headers {
+            merged
+                .entry(key.clone())
+                .or_insert_with(|| format!("${value}"));
+        }
+    }
+    merged
+}
+
+async fn resolve_fs_path(
+    state: &Arc<AppState>,
+    session_id: Option<&str>,
+    raw_path: &str,
+) -> Result<PathBuf, SandboxError> {
+    let path = PathBuf::from(raw_path);
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    let root = resolve_fs_root(state, session_id).await?;
+    let relative = sanitize_relative_path(&path)?;
+    Ok(root.join(relative))
+}
+
+async fn resolve_fs_root(
+    state: &Arc<AppState>,
+    session_id: Option<&str>,
+) -> Result<PathBuf, SandboxError> {
+    if let Some(session_id) = session_id {
+        return state.session_manager.session_working_dir(session_id).await;
+    }
+    let home = dirs::home_dir().ok_or_else(|| SandboxError::InvalidRequest {
+        message: "home directory unavailable".to_string(),
+    })?;
+    Ok(home)
+}
+
+fn sanitize_relative_path(path: &StdPath) -> Result<PathBuf, SandboxError> {
+    use std::path::Component;
+    let mut sanitized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(value) => sanitized.push(value),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(SandboxError::InvalidRequest {
+                    message: format!("invalid relative path: {}", path.display()),
+                });
+            }
+        }
+    }
+    Ok(sanitized)
+}
+
+fn map_fs_error(path: &StdPath, err: std::io::Error) -> SandboxError {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        SandboxError::InvalidRequest {
+            message: format!("path not found: {}", path.display()),
+        }
+    } else {
+        SandboxError::StreamError {
+            message: err.to_string(),
+        }
+    }
+}
+
+fn format_message_with_attachments(message: &str, attachments: &[MessageAttachment]) -> String {
+    if attachments.is_empty() {
+        return message.to_string();
+    }
+    let mut combined = String::new();
+    combined.push_str(message);
+    combined.push_str("\n\nAttachments:\n");
+    for attachment in attachments {
+        combined.push_str("- ");
+        combined.push_str(&attachment.path);
+        combined.push('\n');
+    }
+    combined
+}
+
+fn opencode_file_part_input(attachment: &MessageAttachment) -> Value {
+    let path = attachment.path.as_str();
+    let url = if path.starts_with("file://") {
+        path.to_string()
+    } else {
+        format!("file://{path}")
+    };
+    let filename = attachment.filename.clone().or_else(|| {
+        let clean = path.strip_prefix("file://").unwrap_or(path);
+        StdPath::new(clean)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+    });
+    let mut map = serde_json::Map::new();
+    map.insert("type".to_string(), json!("file"));
+    map.insert(
+        "mime".to_string(),
+        json!(attachment
+            .mime
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string())),
+    );
+    map.insert("url".to_string(), json!(url));
+    if let Some(filename) = filename {
+        map.insert("filename".to_string(), json!(filename));
+    }
+    Value::Object(map)
 }
 
 fn claude_input_session_id(session: &SessionSnapshot) -> String {
@@ -4441,6 +8183,81 @@ fn claude_control_response_line(request_id: &str, behavior: &str, response: Valu
         }
     })
     .to_string()
+}
+
+/// Returns true if the given action name corresponds to a question tool
+/// (AskUserQuestion or ExitPlanMode in any casing convention).
+pub(crate) fn is_question_tool_action(action: &str) -> bool {
+    matches!(
+        action,
+        "AskUserQuestion"
+            | "ask_user_question"
+            | "askUserQuestion"
+            | "ask-user-question"
+            | "ExitPlanMode"
+            | "exit_plan_mode"
+            | "exitPlanMode"
+            | "exit-plan-mode"
+    )
+}
+
+fn is_file_change_action(action: &str) -> bool {
+    matches!(action, "fileChange" | "file_change" | "file-change")
+        || action.eq_ignore_ascii_case("filechange")
+}
+
+fn permission_cache_keys(action: &str, metadata: &Option<Value>) -> Vec<String> {
+    let mut keys = Vec::new();
+    push_permission_cache_key(&mut keys, action);
+    if let Some(metadata) = metadata.as_ref().and_then(Value::as_object) {
+        if let Some(permission) = metadata.get("permission").and_then(Value::as_str) {
+            push_permission_cache_key(&mut keys, permission);
+        }
+        if let Some(kind) = metadata.get("codexRequestKind").and_then(Value::as_str) {
+            push_permission_cache_key(&mut keys, kind);
+        }
+        if let Some(tool_name) = metadata
+            .get("toolName")
+            .or_else(|| metadata.get("tool_name"))
+            .and_then(Value::as_str)
+        {
+            push_permission_cache_key(&mut keys, tool_name);
+        }
+    }
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
+fn push_permission_cache_key(keys: &mut Vec<String>, raw: &str) {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return;
+    }
+    keys.push(raw.to_string());
+    if let Some(category) = permission_action_category(raw) {
+        keys.push(category);
+    }
+}
+
+fn permission_action_category(action: &str) -> Option<String> {
+    let first = action.split_whitespace().next().unwrap_or(action);
+    let stripped = first
+        .split_once(':')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(first)
+        .trim();
+    if stripped.is_empty() {
+        return None;
+    }
+    if stripped
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.')
+    {
+        Some(stripped.to_ascii_lowercase())
+    } else {
+        None
+    }
 }
 
 fn read_lines<R: std::io::Read>(reader: R, sender: mpsc::UnboundedSender<String>) {
@@ -4971,6 +8788,156 @@ fn codex_rpc_error_to_universal(error: &codex_schema::JsonrpcError) -> EventConv
     EventConversion::new(UniversalEventType::Error, UniversalEventData::Error(data))
 }
 
+fn codex_request_error_to_sandbox(
+    context: &str,
+    error: &codex_schema::JsonrpcErrorError,
+) -> SandboxError {
+    SandboxError::StreamError {
+        message: format!("{context}: {} (code {})", error.message, error.code),
+    }
+}
+
+fn codex_model_unavailable_status_event(
+    native_session_id: Option<String>,
+    model_id: &str,
+) -> EventConversion {
+    EventConversion::new(
+        UniversalEventType::ItemCompleted,
+        UniversalEventData::Item(ItemEventData {
+            item: UniversalItem {
+                item_id: String::new(),
+                native_item_id: None,
+                parent_id: None,
+                kind: ItemKind::Status,
+                role: Some(ItemRole::System),
+                content: vec![ContentPart::Status {
+                    label: "codex.model.unavailable".to_string(),
+                    detail: Some(format!(
+                        "Model '{}' was rejected by provider; falling back to default for this session.",
+                        model_id
+                    )),
+                }],
+                status: ItemStatus::Completed,
+            },
+        }),
+    )
+    .synthetic()
+    .with_native_session(native_session_id)
+}
+
+fn codex_unavailable_model_from_message(message: &str) -> Option<String> {
+    let normalized = message.to_ascii_lowercase();
+    if !normalized.contains("model") {
+        return None;
+    }
+    let is_known_unavailable_shape = normalized.contains("does not exist")
+        || normalized.contains("model_not_found")
+        || normalized.contains("requested model")
+        || normalized.contains("not supported when using codex with a chatgpt account");
+    if !is_known_unavailable_shape {
+        return None;
+    }
+    for token in extract_quoted_tokens(message, '\'')
+        .into_iter()
+        .chain(extract_quoted_tokens(message, '"').into_iter())
+    {
+        if is_likely_model_id(token) {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+fn codex_unavailable_model_from_rpc_error(
+    error: &codex_schema::JsonrpcErrorError,
+) -> Option<String> {
+    codex_unavailable_model_from_message(&error.message).or_else(|| {
+        error
+            .data
+            .as_ref()
+            .and_then(|data| codex_unavailable_model_from_message(&data.to_string()))
+    })
+}
+
+fn extract_quoted_tokens<'a>(message: &'a str, quote: char) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    for (idx, ch) in message.char_indices() {
+        if ch != quote {
+            continue;
+        }
+        if let Some(open) = start.take() {
+            if open < idx {
+                out.push(&message[open..idx]);
+            }
+        } else {
+            start = Some(idx + ch.len_utf8());
+        }
+    }
+    out
+}
+
+fn is_likely_model_id(candidate: &str) -> bool {
+    if candidate.len() < 3 || candidate.len() > 128 {
+        return false;
+    }
+    if candidate.chars().any(|ch| ch.is_whitespace()) {
+        return false;
+    }
+    if !candidate
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        return false;
+    }
+    candidate.contains('-')
+}
+
+fn codex_permission_response_line(
+    permission_id: &str,
+    pending: &PendingPermission,
+    reply: PermissionReply,
+) -> Result<String, SandboxError> {
+    let metadata = pending.metadata.clone().unwrap_or(Value::Null);
+    let request_id = codex_request_id_from_metadata(&metadata)
+        .or_else(|| codex_request_id_from_string(permission_id))
+        .ok_or_else(|| SandboxError::InvalidRequest {
+            message: "invalid codex permission request id".to_string(),
+        })?;
+    let request_kind = metadata
+        .get("codexRequestKind")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let response_value = match request_kind {
+        "commandExecution" => {
+            let decision = codex_command_decision_for_reply(reply);
+            let response = codex_schema::CommandExecutionRequestApprovalResponse { decision };
+            serde_json::to_value(response).map_err(|err| SandboxError::InvalidRequest {
+                message: err.to_string(),
+            })?
+        }
+        "fileChange" => {
+            let decision = codex_file_change_decision_for_reply(reply);
+            let response = codex_schema::FileChangeRequestApprovalResponse { decision };
+            serde_json::to_value(response).map_err(|err| SandboxError::InvalidRequest {
+                message: err.to_string(),
+            })?
+        }
+        _ => {
+            return Err(SandboxError::InvalidRequest {
+                message: "unsupported codex permission request".to_string(),
+            });
+        }
+    };
+    let response = codex_schema::JsonrpcResponse {
+        id: request_id,
+        result: response_value,
+    };
+    serde_json::to_string(&response).map_err(|err| SandboxError::InvalidRequest {
+        message: err.to_string(),
+    })
+}
+
 fn codex_request_id_from_metadata(metadata: &Value) -> Option<codex_schema::RequestId> {
     let metadata = metadata.as_object()?;
     let value = metadata.get("codexRequestId")?;
@@ -5198,6 +9165,10 @@ pub mod test_utils {
                 model: None,
                 variant: None,
                 agent_version: None,
+                directory: None,
+                title: None,
+                mcp: None,
+                skills: None,
             };
             let mut session =
                 SessionState::new(session_id.to_string(), agent, &request).expect("session");
@@ -5487,7 +9458,26 @@ fn mock_command_conversions(prefix: &str, input: &str) -> Vec<EventConversion> {
     if trimmed.is_empty() {
         return vec![];
     }
+    let mut events = mock_command_events(prefix, trimmed);
+    if should_append_turn_ended(&events) {
+        events.push(turn_ended_event(None, None).synthetic());
+    }
+    events
+}
 
+fn should_append_turn_ended(events: &[EventConversion]) -> bool {
+    let Some(last) = events.last() else {
+        return false;
+    };
+    !matches!(
+        last.event_type,
+        UniversalEventType::SessionEnded
+            | UniversalEventType::PermissionRequested
+            | UniversalEventType::QuestionRequested
+    )
+}
+
+fn mock_command_events(prefix: &str, trimmed: &str) -> Vec<EventConversion> {
     if trimmed.eq_ignore_ascii_case(MOCK_OK_PROMPT) {
         return mock_assistant_message(format!("{prefix}_ok"), "OK".to_string());
     }
@@ -6322,42 +10312,16 @@ fn stream_turn_events(
     })
 }
 
-fn is_turn_terminal(event: &UniversalEvent, agent: AgentId) -> bool {
+fn is_turn_terminal(event: &UniversalEvent, _agent: AgentId) -> bool {
     match event.event_type {
-        UniversalEventType::SessionEnded
+        UniversalEventType::TurnEnded
+        | UniversalEventType::SessionEnded
         | UniversalEventType::Error
         | UniversalEventType::AgentUnparsed
         | UniversalEventType::PermissionRequested
         | UniversalEventType::QuestionRequested => true,
-        UniversalEventType::ItemCompleted => {
-            let UniversalEventData::Item(ItemEventData { item }) = &event.data else {
-                return false;
-            };
-            if let Some(label) = status_label(item) {
-                if label == "turn.completed" || label == "session.idle" {
-                    return true;
-                }
-            }
-            if matches!(item.role, Some(ItemRole::Assistant)) && item.kind == ItemKind::Message {
-                return agent != AgentId::Codex;
-            }
-            false
-        }
         _ => false,
     }
-}
-
-fn status_label(item: &UniversalItem) -> Option<&str> {
-    if item.kind != ItemKind::Status {
-        return None;
-    }
-    item.content.iter().find_map(|part| {
-        if let ContentPart::Status { label, .. } = part {
-            Some(label.as_str())
-        } else {
-            None
-        }
-    })
 }
 
 fn to_sse_event(event: UniversalEvent) -> Event {
@@ -6396,4 +10360,35 @@ pub fn add_token_header(headers: &mut HeaderMap, token: &str) {
     if let Ok(header) = HeaderValue::from_str(&value) {
         headers.insert(axum::http::header::AUTHORIZATION, header);
     }
+}
+
+fn build_anthropic_headers(
+    credentials: &ProviderCredentials,
+) -> Result<reqwest::header::HeaderMap, SandboxError> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    match credentials.auth_type {
+        AuthType::ApiKey => {
+            let value =
+                reqwest::header::HeaderValue::from_str(&credentials.api_key).map_err(|_| {
+                    SandboxError::StreamError {
+                        message: "invalid anthropic api key header".to_string(),
+                    }
+                })?;
+            headers.insert("x-api-key", value);
+        }
+        AuthType::Oauth => {
+            let value = format!("Bearer {}", credentials.api_key);
+            let header = reqwest::header::HeaderValue::from_str(&value).map_err(|_| {
+                SandboxError::StreamError {
+                    message: "invalid anthropic oauth header".to_string(),
+                }
+            })?;
+            headers.insert(reqwest::header::AUTHORIZATION, header);
+        }
+    }
+    headers.insert(
+        "anthropic-version",
+        reqwest::header::HeaderValue::from_static(ANTHROPIC_VERSION),
+    );
+    Ok(headers)
 }

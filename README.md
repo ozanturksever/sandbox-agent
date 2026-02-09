@@ -12,6 +12,10 @@
   <a href="https://sandboxagent.dev/docs">Documentation</a> — <a href="https://sandboxagent.dev/docs/api-reference">API Reference</a> — <a href="https://rivet.dev/discord">Discord</a>
 </p>
 
+<p align="center">
+  <em><strong>Experimental:</strong> <a href="./gigacode/">Gigacode</a> — use OpenCode's TUI with any coding agent.</em>
+</p>
+
 ## Why Sandbox Agent?
 
 Running coding agents remotely is hard. Existing SDKs assume local execution, SSH breaks TTY handling and streaming, and every agent has a different API. Building from scratch means reimplementing everything for each coding agent.
@@ -34,6 +38,7 @@ Sandbox Agent solves three problems:
 - **Runs Inside Any Sandbox**: Lightweight static Rust binary. One curl command to install inside E2B, Daytona, Vercel Sandboxes, or Docker
 - **Server or SDK Mode**: Run as an HTTP server or embed with the TypeScript SDK
 - **OpenAPI Spec**: [Well documented](https://sandboxagent.dev/docs/api-reference) and easy to integrate from any language
+- **OpenCode SDK & UI Support** *(Experimental)*: [Connect OpenCode CLI, SDK, or web UI](https://sandboxagent.dev/docs/opencode-compatibility) to control agents through familiar OpenCode tooling
 
 ## Architecture
 
@@ -125,6 +130,8 @@ for await (const event of client.streamEvents("demo", { offset: 0 })) {
   console.log(event.type, event.data);
 }
 ```
+
+`permissionMode: "acceptEdits"` passes through to Claude, auto-approves file changes for Codex, and is treated as `default` for other agents.
 
 [SDK documentation](https://sandboxagent.dev/docs/sdks/typescript) — [Building a Chat UI](https://sandboxagent.dev/docs/building-chat-ui) — [Managing Sessions](https://sandboxagent.dev/docs/manage-sessions)
 

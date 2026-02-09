@@ -1,5 +1,6 @@
 import { Sandbox } from "@vercel/sandbox";
-import { runPrompt, waitForHealth } from "@sandbox-agent/example-shared";
+import { SandboxAgent } from "sandbox-agent";
+import { detectAgent, buildInspectorUrl, generateSessionId, waitForHealth } from "@sandbox-agent/example-shared";
 
 const envs: Record<string, string> = {};
 if (process.env.ANTHROPIC_API_KEY) envs.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -40,12 +41,18 @@ const baseUrl = sandbox.domain(3000);
 console.log("Waiting for server...");
 await waitForHealth({ baseUrl });
 
+const client = await SandboxAgent.connect({ baseUrl });
+const sessionId = generateSessionId();
+await client.createSession(sessionId, { agent: detectAgent() });
+
+console.log(`  UI: ${buildInspectorUrl({ baseUrl, sessionId })}`);
+console.log("  Press Ctrl+C to stop.");
+
+const keepAlive = setInterval(() => {}, 60_000);
 const cleanup = async () => {
+  clearInterval(keepAlive);
   await sandbox.stop();
   process.exit(0);
 };
 process.once("SIGINT", cleanup);
 process.once("SIGTERM", cleanup);
-
-await runPrompt(baseUrl);
-await cleanup();

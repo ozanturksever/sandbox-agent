@@ -26,59 +26,96 @@
 	"navbar": {
 		"links": [
 			{
+				"label": "Gigacode",
+				"icon": "terminal",
+				"href": "https://github.com/rivet-dev/sandbox-agent/tree/main/gigacode"
+			},
+			{
 				"label": "Discord",
 				"icon": "discord",
 				"href": "https://discord.gg/auCecybynK"
 			},
 			{
-				"label": "GitHub",
-				"icon": "github",
+				"type": "github",
 				"href": "https://github.com/rivet-dev/sandbox-agent"
 			}
 		]
 	},
 	"navigation": {
-		"pages": [
+		"tabs": [
 			{
-				"group": "Getting started",
-				"pages": ["quickstart", "building-chat-ui", "manage-sessions"]
-			},
-			{
-				"group": "Deploy",
+				"tab": "Documentation",
 				"pages": [
-					"deploy/index",
-					"deploy/local",
-					"deploy/e2b",
-					"deploy/daytona",
-					"deploy/vercel",
-					"deploy/cloudflare",
-					"deploy/docker"
-				]
-			},
-			{
-				"group": "SDKs",
-				"pages": ["sdks/typescript", "sdks/python"]
-			},
-			{
-				"group": "Reference",
-				"pages": [
-					"cli",
-					"inspector",
-					"session-transcript-schema",
-					"cors",
 					{
-						"group": "AI",
-						"pages": ["ai/skill", "ai/llms-txt"]
+						"group": "Getting started",
+						"pages": [
+							"quickstart",
+							"building-chat-ui",
+							"manage-sessions",
+							{
+								"group": "Deploy",
+								"icon": "server",
+								"pages": [
+									"deploy/local",
+									"deploy/e2b",
+									"deploy/daytona",
+									"deploy/vercel",
+									"deploy/cloudflare",
+									"deploy/docker"
+								]
+							}
+						]
 					},
 					{
-						"group": "Advanced",
-						"pages": ["telemetry"]
+						"group": "SDKs",
+						"pages": ["sdks/typescript", "sdks/python"]
+					},
+					{
+						"group": "Agent Features",
+						"pages": [
+							"agent-sessions",
+							"attachments",
+							"skills-config",
+							"mcp-config",
+							"custom-tools"
+						]
+					},
+					{
+						"group": "Features",
+						"pages": ["file-system"]
+					},
+					{
+						"group": "Reference",
+						"pages": [
+							"cli",
+							"inspector",
+							"session-transcript-schema",
+							"opencode-compatibility",
+							{
+								"group": "More",
+								"pages": [
+									"credentials",
+									"daemon",
+									"cors",
+									"telemetry",
+									{
+										"group": "AI",
+										"pages": ["ai/skill", "ai/llms-txt"]
+									}
+								]
+							}
+						]
 					}
 				]
 			},
 			{
-				"group": "HTTP API Reference",
-				"openapi": "openapi.json"
+				"tab": "HTTP API",
+				"pages": [
+					{
+						"group": "HTTP Reference",
+						"openapi": "openapi.json"
+					}
+				]
 			}
 		]
 	}

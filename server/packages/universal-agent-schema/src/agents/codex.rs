@@ -4,7 +4,7 @@ use crate::codex as schema;
 use crate::{
     ContentPart, ErrorData, EventConversion, ItemDeltaData, ItemEventData, ItemKind, ItemRole,
     ItemStatus, ReasoningVisibility, SessionEndReason, SessionEndedData, SessionStartedData,
-    TerminatedBy, UniversalEventData, UniversalEventType, UniversalItem,
+    TerminatedBy, TurnEventData, TurnPhase, UniversalEventData, UniversalEventType, UniversalItem,
 };
 
 /// Convert a Codex ServerNotification to universal events.
@@ -36,18 +36,26 @@ pub fn notification_to_universal(
             Some(params.thread_id.clone()),
             raw,
         )]),
-        schema::ServerNotification::TurnStarted(params) => Ok(vec![status_event(
-            "turn.started",
-            serde_json::to_string(&params.turn).ok(),
-            Some(params.thread_id.clone()),
-            raw,
-        )]),
-        schema::ServerNotification::TurnCompleted(params) => Ok(vec![status_event(
-            "turn.completed",
-            serde_json::to_string(&params.turn).ok(),
-            Some(params.thread_id.clone()),
-            raw,
-        )]),
+        schema::ServerNotification::TurnStarted(params) => Ok(vec![EventConversion::new(
+            UniversalEventType::TurnStarted,
+            UniversalEventData::Turn(TurnEventData {
+                phase: TurnPhase::Started,
+                turn_id: Some(params.turn.id.clone()),
+                metadata: serde_json::to_value(&params.turn).ok(),
+            }),
+        )
+        .with_native_session(Some(params.thread_id.clone()))
+        .with_raw(raw)]),
+        schema::ServerNotification::TurnCompleted(params) => Ok(vec![EventConversion::new(
+            UniversalEventType::TurnEnded,
+            UniversalEventData::Turn(TurnEventData {
+                phase: TurnPhase::Ended,
+                turn_id: Some(params.turn.id.clone()),
+                metadata: serde_json::to_value(&params.turn).ok(),
+            }),
+        )
+        .with_native_session(Some(params.thread_id.clone()))
+        .with_raw(raw)]),
         schema::ServerNotification::TurnDiffUpdated(params) => Ok(vec![status_event(
             "turn.diff.updated",
             serde_json::to_string(params).ok(),

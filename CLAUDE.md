@@ -47,12 +47,23 @@ Universal schema guidance:
 - On parse failures, emit an `agent.unparsed` event (source=daemon, synthetic=true) and treat it as a test failure. Preserve raw payloads when `include_raw=true`.
 - Track subagent support in `docs/conversion.md`. For now, normalize subagent activity into normal message/tool flow, but revisit explicit subagent modeling later.
 - Keep the FAQ in `README.md` and `frontend/packages/website/src/components/FAQ.tsx` in sync. When adding or modifying FAQ entries, update both files.
+- Update `research/wip-agent-support.md` as agent support changes are implemented.
+
+### OpenAPI / utoipa requirements
+
+Every `#[utoipa::path(...)]` handler function must have a doc comment where:
+- The **first line** becomes the OpenAPI `summary` (short human-readable title, e.g. `"List Agents"`). This is used as the sidebar label and page heading in the docs site.
+- The **remaining lines** become the OpenAPI `description` (one-sentence explanation of what the endpoint does).
+- Every `responses(...)` entry must have a `description` (no empty descriptions).
+
+When adding or modifying endpoints, regenerate `docs/openapi.json` and verify titles render correctly in the docs site.
 
 ### CLI ⇄ HTTP endpoint map (keep in sync)
 
 - `sandbox-agent api agents list` ↔ `GET /v1/agents`
 - `sandbox-agent api agents install` ↔ `POST /v1/agents/{agent}/install`
 - `sandbox-agent api agents modes` ↔ `GET /v1/agents/{agent}/modes`
+- `sandbox-agent api agents models` ↔ `GET /v1/agents/{agent}/models`
 - `sandbox-agent api sessions list` ↔ `GET /v1/sessions`
 - `sandbox-agent api sessions create` ↔ `POST /v1/sessions/{sessionId}`
 - `sandbox-agent api sessions send-message` ↔ `POST /v1/sessions/{sessionId}/messages`
@@ -63,10 +74,60 @@ Universal schema guidance:
 - `sandbox-agent api sessions reply-question` ↔ `POST /v1/sessions/{sessionId}/questions/{questionId}/reply`
 - `sandbox-agent api sessions reject-question` ↔ `POST /v1/sessions/{sessionId}/questions/{questionId}/reject`
 - `sandbox-agent api sessions reply-permission` ↔ `POST /v1/sessions/{sessionId}/permissions/{permissionId}/reply`
+- `sandbox-agent api fs entries` ↔ `GET /v1/fs/entries`
+- `sandbox-agent api fs read` ↔ `GET /v1/fs/file`
+- `sandbox-agent api fs write` ↔ `PUT /v1/fs/file`
+- `sandbox-agent api fs delete` ↔ `DELETE /v1/fs/entry`
+- `sandbox-agent api fs mkdir` ↔ `POST /v1/fs/mkdir`
+- `sandbox-agent api fs move` ↔ `POST /v1/fs/move`
+- `sandbox-agent api fs stat` ↔ `GET /v1/fs/stat`
+- `sandbox-agent api fs upload-batch` ↔ `POST /v1/fs/upload-batch`
+
+## OpenCode Compatibility Layer
+
+`sandbox-agent opencode` starts a sandbox-agent server and attaches an OpenCode session (uses `/opencode`).
+
+### Session ownership
+
+Sessions are stored **only** in sandbox-agent's v1 `SessionManager` — they are never sent to or stored in the native OpenCode server. The OpenCode TUI reads sessions via `GET /session` which the compat layer serves from the v1 store. The native OpenCode process has no knowledge of sessions.
+
+### Proxy elimination strategy
+
+The `/opencode` compat layer (`opencode_compat.rs`) historically proxied many endpoints to the native OpenCode server via `proxy_native_opencode()`. The goal is to **eliminate proxying** by implementing each endpoint natively using the v1 `SessionManager` as the single source of truth.
+
+**Already de-proxied** (use v1 SessionManager directly):
+- `GET /session` — `oc_session_list` reads from `SessionManager::list_sessions()`
+- `GET /session/{id}` — `oc_session_get` reads from `SessionManager::get_session_info()`
+- `GET /session/status` — `oc_session_status` derives busy/idle from v1 session `ended` flag
+- `POST /tui/open-sessions` — returns `true` directly (TUI fetches sessions from `GET /session`)
+- `POST /tui/select-session` — emits `tui.session.select` event via the OpenCode event broadcaster
+
+**Still proxied** (none of these reference session IDs or the session list — all are session-agnostic):
+- `GET /command` — command list
+- `GET /config`, `PATCH /config` — project config read/write
+- `GET /global/config`, `PATCH /global/config` — global config read/write
+- `GET /tui/control/next`, `POST /tui/control/response` — TUI control loop
+- `POST /tui/append-prompt`, `/tui/submit-prompt`, `/tui/clear-prompt` — prompt management
+- `POST /tui/open-help`, `/tui/open-themes`, `/tui/open-models` — TUI navigation
+- `POST /tui/execute-command`, `/tui/show-toast`, `/tui/publish` — TUI actions
+
+When converting a proxied endpoint: add needed fields to `SessionState`/`SessionInfo` in `router.rs`, implement the logic natively in `opencode_compat.rs`, and use `session_info_to_opencode_value()` to format responses.
 
 ## Post-Release Testing
 
 After cutting a release, verify the release works correctly. Run `/project:post-release-testing` to execute the testing agent.
+
+## OpenCode Compatibility Tests
+
+The OpenCode compatibility suite lives at `server/packages/sandbox-agent/tests/opencode-compat` and validates the `@opencode-ai/sdk` against the `/opencode` API. Run it with:
+
+```bash
+SANDBOX_AGENT_SKIP_INSPECTOR=1 pnpm --filter @sandbox-agent/opencode-compat-tests test
+```
+
+## Naming
+
+- The product name is "Gigacode" (capital G, lowercase c). The CLI binary/package is `gigacode` (lowercase).
 
 ## Git Commits
 

@@ -1,0 +1,8 @@
+---
+source: server/packages/sandbox-agent/tests/http/agent_endpoints.rs
+expression: "normalize_agent_models(&models, config.agent)"
+---
+defaultInList: true
+hasDefault: true
+hasVariants: "<redacted>"
+nonEmpty: true

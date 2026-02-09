@@ -1,5 +1,6 @@
 ---
 source: server/packages/sandbox-agent/tests/sessions/session_lifecycle.rs
+assertion_line: 12
 expression: value
 ---
 session_a:
@@ -15,19 +16,13 @@ session_a:
       status: in_progress
     seq: 2
     type: item.started
-  - delta:
-      delta: "<redacted>"
-      item_id: "<redacted>"
-      native_item_id: "<redacted>"
-    seq: 3
-    type: item.delta
   - item:
       content_types:
         - text
       kind: message
       role: user
       status: completed
-    seq: 4
+    seq: 3
     type: item.completed
   - item:
       content_types:
@@ -35,13 +30,13 @@ session_a:
       kind: message
       role: assistant
       status: in_progress
-    seq: 5
+    seq: 4
     type: item.started
   - delta:
       delta: "<redacted>"
       item_id: "<redacted>"
       native_item_id: "<redacted>"
-    seq: 6
+    seq: 5
     type: item.delta
   - item:
       content_types:
@@ -49,7 +44,7 @@ session_a:
       kind: message
       role: assistant
       status: completed
-    seq: 7
+    seq: 6
     type: item.completed
 session_b:
   - metadata: true
@@ -64,19 +59,13 @@ session_b:
       status: in_progress
     seq: 2
     type: item.started
-  - delta:
-      delta: "<redacted>"
-      item_id: "<redacted>"
-      native_item_id: "<redacted>"
-    seq: 3
-    type: item.delta
   - item:
       content_types:
         - text
       kind: message
       role: user
       status: completed
-    seq: 4
+    seq: 3
     type: item.completed
   - item:
       content_types:
@@ -84,13 +73,13 @@ session_b:
       kind: message
       role: assistant
       status: in_progress
-    seq: 5
+    seq: 4
     type: item.started
   - delta:
       delta: "<redacted>"
       item_id: "<redacted>"
       native_item_id: "<redacted>"
-    seq: 6
+    seq: 5
     type: item.delta
   - item:
       content_types:
@@ -98,5 +87,5 @@ session_b:
       kind: message
       role: assistant
       status: completed
-    seq: 7
+    seq: 6
     type: item.completed

@@ -3,13 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/daytona.ts",
+    "start": "tsx src/index.ts",
     "start:snapshot": "tsx src/daytona-with-snapshot.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@daytonaio/sdk": "latest",
-    "@sandbox-agent/example-shared": "workspace:*"
+    "@sandbox-agent/example-shared": "workspace:*",
+    "sandbox-agent": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "latest",

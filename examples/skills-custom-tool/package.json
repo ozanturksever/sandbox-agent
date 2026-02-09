@@ -1,0 +1,20 @@
+{
+  "name": "@sandbox-agent/example-skills-custom-tool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:script": "esbuild src/random-number.ts --bundle --format=cjs --platform=node --target=node18 --minify --outfile=dist/random-number.cjs",
+    "start": "pnpm build:script && tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sandbox-agent/example-shared": "workspace:*",
+    "sandbox-agent": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "esbuild": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}

@@ -40,7 +40,7 @@ const DebugPanel = ({
   defaultAgents: string[];
   modesByAgent: Record<string, AgentModeInfo[]>;
   onRefreshAgents: () => void;
-  onInstallAgent: (agentId: string, reinstall: boolean) => void;
+  onInstallAgent: (agentId: string, reinstall: boolean) => Promise<void>;
   agentsLoading: boolean;
   agentsError: string | null;
 }) => {

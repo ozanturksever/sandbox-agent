@@ -1,0 +1,52 @@
+/**
+ * Tests for OpenCode-compatible provider/model listing.
+ */
+
+import { describe, it, expect, beforeAll, afterEach, beforeEach } from "vitest";
+import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk";
+import { spawnSandboxAgent, buildSandboxAgent, type SandboxAgentHandle } from "./helpers/spawn";
+
+describe("OpenCode-compatible Model API", () => {
+  let handle: SandboxAgentHandle;
+  let client: OpencodeClient;
+
+  beforeAll(async () => {
+    await buildSandboxAgent();
+  });
+
+  beforeEach(async () => {
+    handle = await spawnSandboxAgent({ opencodeCompat: true });
+    client = createOpencodeClient({
+      baseUrl: `${handle.baseUrl}/opencode`,
+      headers: { Authorization: `Bearer ${handle.token}` },
+    });
+  });
+
+  afterEach(async () => {
+    await handle?.dispose();
+  });
+
+  it("should list models grouped by agent with real model IDs", async () => {
+    const response = await client.provider.list();
+    const providers = response.data?.all ?? [];
+    const mockProvider = providers.find((entry) => entry.id === "mock");
+    const ampProvider = providers.find((entry) => entry.id === "amp");
+    const sandboxProvider = providers.find((entry) => entry.id === "sandbox-agent");
+    expect(sandboxProvider).toBeUndefined();
+    expect(mockProvider).toBeDefined();
+    expect(ampProvider).toBeDefined();
+
+    const mockModels = mockProvider?.models ?? {};
+    expect(mockModels["mock"]).toBeDefined();
+    expect(mockModels["mock"].id).toBe("mock");
+    expect(mockModels["mock"].family).toBe("Mock");
+
+    const ampModels = ampProvider?.models ?? {};
+    expect(ampModels["smart"]).toBeDefined();
+    expect(ampModels["smart"].id).toBe("smart");
+    expect(ampModels["smart"].family).toBe("Amp");
+
+    expect(response.data?.default?.["mock"]).toBe("mock");
+    expect(response.data?.default?.["amp"]).toBe("smart");
+  });
+});
