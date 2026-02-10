@@ -46,6 +46,7 @@ use utoipa::{Modify, OpenApi, ToSchema};
 
 use crate::agent_server_logs::AgentServerLogs;
 use crate::opencode_compat::{build_opencode_router, OpenCodeAppState};
+use crate::terminal::{self, TerminalManager};
 use crate::ui;
 use sandbox_agent_agent_management::agents::{
     AgentError as ManagerError, AgentId, AgentManager, InstallOptions, SpawnOptions, StreamingSpawn,
@@ -121,10 +122,11 @@ impl BrandingMode {
 
 #[derive(Debug)]
 pub struct AppState {
-    auth: AuthConfig,
+    pub(crate) auth: AuthConfig,
     agent_manager: Arc<AgentManager>,
     session_manager: Arc<SessionManager>,
     pub(crate) branding: BrandingMode,
+    pub(crate) terminal_manager: Arc<TerminalManager>,
 }
 
 impl AppState {
@@ -147,6 +149,7 @@ impl AppState {
             agent_manager,
             session_manager,
             branding,
+            terminal_manager: Arc::new(TerminalManager::new()),
         }
     }
 
@@ -214,6 +217,16 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
         .route("/fs/move", post(fs_move))
         .route("/fs/stat", get(fs_stat))
         .route("/fs/upload-batch", post(fs_upload_batch))
+        .route("/terminal", get(terminal::list_terminals).post(terminal::create_terminal))
+        .route("/terminal/:terminal_id", get(terminal::get_terminal).delete(terminal::delete_terminal))
+        .route("/terminal/:terminal_id/resize", post(terminal::resize_terminal))
+        .with_state(shared.clone());
+
+    // WebSocket terminal route — registered BEFORE the auth middleware
+    // because it handles its own auth via query param (browsers can't set
+    // headers on WebSocket upgrade requests).
+    let terminal_ws_router = Router::new()
+        .route("/v1/terminal/:terminal_id/ws", get(terminal::terminal_ws))
         .with_state(shared.clone());
 
     if shared.auth.token.is_some() {
@@ -240,6 +253,7 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
     let mut router = Router::new()
         .route("/", get(get_root))
         .nest("/v1", v1_router)
+        .merge(terminal_ws_router)
         .nest("/opencode", opencode_router)
         .merge(opencode_root_router)
         .fallback(not_found);
@@ -297,6 +311,7 @@ pub fn build_router_with_state(shared: Arc<AppState>) -> (Router, Arc<AppState>)
 
 pub async fn shutdown_servers(state: &Arc<AppState>) {
     state.session_manager.server_manager.shutdown().await;
+    state.terminal_manager.shutdown().await;
 }
 
 #[derive(OpenApi)]
@@ -2021,7 +2036,7 @@ impl SessionManager {
                     })??;
                 Ok(())
             }
-            AgentId::Mock => Ok(()),
+            AgentId::Codebuff | AgentId::Mock => Ok(()),
         }
     }
 
@@ -2260,6 +2275,10 @@ impl SessionManager {
                 }),
             },
             AgentId::Amp => Ok(amp_models_response()),
+            AgentId::Codebuff => Ok(AgentModelsResponse {
+                models: Vec::new(),
+                default_model: None,
+            }),
             AgentId::Mock => Ok(mock_models_response()),
         }
     }
@@ -3655,7 +3674,7 @@ impl SessionManager {
             }
         };
 
-        let url = format!("{base_url}/event/subscribe");
+        let url = format!("{base_url}/event");
         let response = match self.http_client.get(url).send().await {
             Ok(response) => response,
             Err(err) => {
@@ -4549,7 +4568,7 @@ impl SessionManager {
                 .ok_or_else(|| SandboxError::InvalidRequest {
                     message: "missing OpenCode session id".to_string(),
                 })?;
-        let url = format!("{base_url}/session/{session_id}/prompt");
+        let url = format!("{base_url}/session/{session_id}/message");
         let mut parts = vec![json!({ "type": "text", "text": prompt })];
         for attachment in attachments {
             parts.push(opencode_file_part_input(attachment));
@@ -5386,7 +5405,7 @@ async fn list_agents(
                     let capabilities = agent_capabilities_for(agent_id);
 
                     let credentials_available = match agent_id {
-                        AgentId::Claude | AgentId::Amp => has_anthropic,
+                        AgentId::Claude | AgentId::Amp | AgentId::Codebuff => has_anthropic,
                         AgentId::Codex => has_openai,
                         AgentId::Opencode => has_anthropic || has_openai,
                         AgentId::Mock => true,

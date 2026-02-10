@@ -40,6 +40,7 @@ toml_edit.workspace = true
 tar.workspace = true
 zip.workspace = true
 tempfile = { workspace = true, optional = true }
+portable-pty.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

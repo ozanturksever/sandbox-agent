@@ -1016,6 +1016,7 @@ async fn build_opencode_model_cache(state: &OpenCodeAppState) -> OpenCodeModelCa
                     _ => has_anthropic || has_openai,
                 }
             }
+            Some(AgentId::Codebuff) => has_anthropic,
             Some(AgentId::Mock) => true,
             None => false,
         };
@@ -1159,6 +1160,7 @@ fn agent_display_name(agent: AgentId) -> &'static str {
         AgentId::Codex => "Codex",
         AgentId::Opencode => "OpenCode",
         AgentId::Amp => "Amp",
+        AgentId::Codebuff => "Codebuff",
         AgentId::Mock => "Mock",
     }
 }

@@ -82,6 +82,12 @@ When adding or modifying endpoints, regenerate `docs/openapi.json` and verify ti
 - `sandbox-agent api fs move` ↔ `POST /v1/fs/move`
 - `sandbox-agent api fs stat` ↔ `GET /v1/fs/stat`
 - `sandbox-agent api fs upload-batch` ↔ `POST /v1/fs/upload-batch`
+- `sandbox-agent api terminal list` ↔ `GET /v1/terminal`
+- `sandbox-agent api terminal create` ↔ `POST /v1/terminal`
+- `sandbox-agent api terminal get` ↔ `GET /v1/terminal/{terminalId}`
+- `sandbox-agent api terminal delete` ↔ `DELETE /v1/terminal/{terminalId}`
+- `sandbox-agent api terminal resize` ↔ `POST /v1/terminal/{terminalId}/resize`
+- `sandbox-agent api terminal connect` ↔ `GET /v1/terminal/{terminalId}/ws` (WebSocket)
 
 ## OpenCode Compatibility Layer
 

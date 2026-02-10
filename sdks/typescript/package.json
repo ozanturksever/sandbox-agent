@@ -20,9 +20,7 @@
       "import": "./dist/integrations/ooss/index.js"
     }
   },
-  "dependencies": {
-    "@sandbox-agent/cli-shared": "workspace:*"
-  },
+  "dependencies": {},
   "files": [
     "dist"
   ],
