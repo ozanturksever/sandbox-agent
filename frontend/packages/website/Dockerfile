@@ -1,6 +1,6 @@
 FROM node:22-alpine AS build
 WORKDIR /app
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9
 
 # Copy website package
 COPY frontend/packages/website/package.json ./

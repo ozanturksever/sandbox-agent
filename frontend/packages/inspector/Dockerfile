@@ -1,14 +1,19 @@
 FROM node:22-alpine AS build
 WORKDIR /app
-RUN npm install -g pnpm
+RUN npm install -g pnpm@9
 
 # Copy package files for all workspaces
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY frontend/packages/inspector/package.json ./frontend/packages/inspector/
 COPY sdks/typescript/package.json ./sdks/typescript/
+COPY sdks/cli-shared/package.json ./sdks/cli-shared/
 
 # Install dependencies
 RUN pnpm install --filter @sandbox-agent/inspector...
+
+# Copy cli-shared source and build it
+COPY sdks/cli-shared ./sdks/cli-shared
+RUN cd sdks/cli-shared && pnpm exec tsup
 
 # Copy SDK source (with pre-generated types)
 COPY sdks/typescript ./sdks/typescript
