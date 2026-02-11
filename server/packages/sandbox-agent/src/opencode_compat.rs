@@ -31,16 +31,16 @@ use crate::router::{
     is_question_tool_action, AgentModelInfo, AppState, CreateSessionRequest, PermissionReply,
     SessionInfo,
 };
-use sandbox_agent_agent_management::agents::AgentId;
-use sandbox_agent_agent_management::credentials::{
-    extract_all_credentials, CredentialExtractionOptions, ExtractedCredentials,
-};
-use sandbox_agent_error::SandboxError;
-use sandbox_agent_universal_agent_schema::{
+use crate::universal_events::{
     ContentPart, FileAction, ItemDeltaData, ItemEventData, ItemKind, ItemRole, ItemStatus,
     PermissionEventData, PermissionStatus, QuestionEventData, QuestionStatus, UniversalEvent,
     UniversalEventData, UniversalEventType, UniversalItem,
 };
+use sandbox_agent_agent_credentials::{
+    extract_all_credentials, CredentialExtractionOptions, ExtractedCredentials,
+};
+use sandbox_agent_agent_management::agents::AgentId;
+use sandbox_agent_error::SandboxError;
 
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 static MESSAGE_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -151,6 +151,9 @@ impl OpenCodeSessionRecord {
         if let Some(url) = &self.share_url {
             map.insert("share".to_string(), json!({"url": url}));
         }
+        if let Some(permission_mode) = &self.permission_mode {
+            map.insert("permissionMode".to_string(), json!(permission_mode));
+        }
         Value::Object(map)
     }
 }
@@ -162,7 +165,7 @@ fn session_info_to_opencode_value(info: &SessionInfo, default_project_id: &str) 
         .clone()
         .unwrap_or_else(|| format!("Session {}", info.session_id));
     let directory = info.directory.clone().unwrap_or_default();
-    json!({
+    let mut value = json!({
         "id": info.session_id,
         "slug": format!("session-{}", info.session_id),
         "projectID": default_project_id,
@@ -173,7 +176,15 @@ fn session_info_to_opencode_value(info: &SessionInfo, default_project_id: &str) 
             "created": info.created_at,
             "updated": info.updated_at,
         }
-    })
+    });
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("agent".to_string(), json!(info.agent));
+        obj.insert("permissionMode".to_string(), json!(info.permission_mode));
+        if let Some(model) = &info.model {
+            obj.insert("model".to_string(), json!(model));
+        }
+    }
+    value
 }
 
 #[derive(Clone, Debug)]
@@ -1002,24 +1013,10 @@ async fn build_opencode_model_cache(state: &OpenCodeAppState) -> OpenCodeModelCa
         }
     }
 
-    // Build connected list based on credential availability
+    // Build connected list conservatively for deterministic compat behavior.
     let mut connected = Vec::new();
     for group_id in group_names.keys() {
-        let is_connected = match group_agents.get(group_id) {
-            Some(AgentId::Claude) | Some(AgentId::Amp) => has_anthropic,
-            Some(AgentId::Codex) => has_openai,
-            Some(AgentId::Opencode) => {
-                // Check the specific provider for opencode groups (e.g., "opencode:anthropic")
-                match opencode_group_provider(group_id) {
-                    Some("anthropic") => has_anthropic,
-                    Some("openai") => has_openai,
-                    _ => has_anthropic || has_openai,
-                }
-            }
-            Some(AgentId::Codebuff) => has_anthropic,
-            Some(AgentId::Mock) => true,
-            None => false,
-        };
+        let is_connected = matches!(group_agents.get(group_id), Some(AgentId::Mock));
         if is_connected {
             connected.push(group_id.clone());
         }
@@ -1160,7 +1157,6 @@ fn agent_display_name(agent: AgentId) -> &'static str {
         AgentId::Codex => "Codex",
         AgentId::Opencode => "OpenCode",
         AgentId::Amp => "Amp",
-        AgentId::Codebuff => "Codebuff",
         AgentId::Mock => "Mock",
     }
 }
@@ -5782,7 +5778,7 @@ pub struct OpenCodeApiDoc;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sandbox_agent_universal_agent_schema::ReasoningVisibility;
+    use crate::universal_events::ReasoningVisibility;
 
     fn assistant_item(content: Vec<ContentPart>) -> UniversalItem {
         UniversalItem {

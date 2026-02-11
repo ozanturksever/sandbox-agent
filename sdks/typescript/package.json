@@ -1,6 +1,6 @@
 {
   "name": "sandbox-agent",
-  "version": "0.1.12-rc.1",
+  "version": "0.2.0",
   "description": "Universal API for automatic coding agents in sandboxes. Supports Claude Code, Codex, OpenCode, and Amp.",
   "license": "Apache-2.0",
   "repository": {
@@ -14,21 +14,20 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./ooss": {
-      "types": "./dist/integrations/ooss/index.d.ts",
-      "import": "./dist/integrations/ooss/index.js"
     }
   },
-  "dependencies": {},
+  "dependencies": {
+    "acp-http-client": "workspace:*",
+    "@sandbox-agent/cli-shared": "workspace:*"
+  },
   "files": [
     "dist"
   ],
   "scripts": {
     "generate:openapi": "SANDBOX_AGENT_SKIP_INSPECTOR=1 cargo run -p sandbox-agent-openapi-gen -- --out ../../docs/openapi.json",
-    "generate:types": "openapi-typescript ../../docs/openapi.json -o src/generated/openapi.ts",
+    "generate:types": "openapi-typescript ../../docs/openapi.json -o src/generated/openapi.ts && node ./scripts/patch-openapi-types.mjs",
     "generate": "pnpm run generate:openapi && pnpm run generate:types",
-    "build": "if [ -z \"$SKIP_OPENAPI_GEN\" ]; then pnpm run generate:openapi; fi && pnpm run generate:types && tsup",
+    "build": "pnpm --filter acp-http-client build && if [ -z \"$SKIP_OPENAPI_GEN\" ]; then pnpm run generate:openapi; fi && pnpm run generate:types && tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

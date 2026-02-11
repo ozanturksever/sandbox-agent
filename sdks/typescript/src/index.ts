@@ -1,79 +1,64 @@
-export { SandboxAgent, SandboxAgentError } from "./client.ts";
+export {
+  LiveAcpConnection,
+  SandboxAgent,
+  SandboxAgentError,
+  Session,
+} from "./client.ts";
+
+export { AcpRpcError } from "acp-http-client";
+
 export { buildInspectorUrl } from "./inspector.ts";
-export type { InspectorUrlOptions } from "./inspector.ts";
+
 export type {
   SandboxAgentConnectOptions,
   SandboxAgentStartOptions,
+  SessionCreateRequest,
+  SessionResumeOrCreateRequest,
+  SessionSendOptions,
+  SessionEventListener,
 } from "./client.ts";
+
+export type { InspectorUrlOptions } from "./inspector.ts";
+
+export {
+  InMemorySessionPersistDriver,
+} from "./types.ts";
+
 export type {
-  AgentCapabilities,
+  AcpEnvelope,
+  AcpServerInfo,
+  AcpServerListResponse,
   AgentInfo,
   AgentInstallRequest,
+  AgentInstallResponse,
   AgentListResponse,
-  AgentModelInfo,
-  AgentModelsResponse,
-  AgentModeInfo,
-  AgentModesResponse,
-  AgentUnparsedData,
-  ContentPart,
-  CreateSessionRequest,
-  CreateSessionResponse,
-  ErrorData,
-  EventSource,
-  EventsQuery,
-  EventsResponse,
-  FileAction,
   FsActionResponse,
   FsDeleteQuery,
   FsEntriesQuery,
   FsEntry,
-  FsEntryType,
   FsMoveRequest,
   FsMoveResponse,
   FsPathQuery,
-  FsSessionQuery,
   FsStat,
   FsUploadBatchQuery,
   FsUploadBatchResponse,
   FsWriteResponse,
   HealthResponse,
-  ItemDeltaData,
-  ItemEventData,
-  ItemKind,
-  ItemRole,
-  ItemStatus,
-  MessageAttachment,
-  MessageRequest,
-  PermissionEventData,
-  PermissionReply,
-  PermissionReplyRequest,
-  PermissionStatus,
-  ProblemDetails,
-  QuestionEventData,
-  QuestionReplyRequest,
-  QuestionStatus,
-  ReasoningVisibility,
-  SessionEndReason,
-  SessionEndedData,
-  SessionInfo,
-  SessionListResponse,
-  SessionStartedData,
-  TerminatedBy,
-  TurnStreamQuery,
-  UniversalEvent,
-  UniversalEventData,
-  UniversalEventType,
-  UniversalItem,
+  InMemorySessionPersistDriverOptions,
+  ListEventsRequest,
+  ListPage,
+  ListPageRequest,
+  McpConfigQuery,
   McpServerConfig,
-  McpCommand,
-  McpRemoteTransport,
-  McpOAuthConfig,
-  McpOAuthConfigOrDisabled,
-  SkillSource,
+  ProblemDetails,
+  SessionEvent,
+  SessionPersistDriver,
+  SessionRecord,
   SkillsConfig,
+  SkillsConfigQuery,
 } from "./types.ts";
-export type { components, paths } from "./generated/openapi.ts";
-export type { SandboxAgentSpawnOptions, SandboxAgentSpawnLogMode } from "./spawn.ts";
 
-// OOSS Integration (also available as 'sandbox-agent/ooss')
-export * from "./integrations/ooss/index.ts";
+export type {
+  SandboxAgentSpawnLogMode,
+  SandboxAgentSpawnOptions,
+} from "./spawn.ts";

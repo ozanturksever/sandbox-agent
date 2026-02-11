@@ -23,6 +23,11 @@ export async function updateVersion(opts: ReleaseOpts) {
 			replace: `"version": "${opts.version}"`,
 		},
 		{
+			path: "sdks/acp-http-client/package.json",
+			find: /"version": ".*"/,
+			replace: `"version": "${opts.version}"`,
+		},
+		{
 			path: "sdks/typescript/package.json",
 			find: /"version": ".*"/,
 			replace: `"version": "${opts.version}"`,
@@ -56,8 +61,9 @@ export async function updateVersion(opts: ReleaseOpts) {
 		"sandbox-agent-error",
 		"sandbox-agent-agent-management",
 		"sandbox-agent-agent-credentials",
-		"sandbox-agent-universal-agent-schema",
-		"sandbox-agent-extracted-agent-schemas",
+		"sandbox-agent-opencode-adapter",
+		"sandbox-agent-opencode-server-manager",
+		"acp-http-adapter",
 	];
 
 	const cargoTomlPath = `${opts.root}/Cargo.toml`;

@@ -1,70 +1,237 @@
-import type { components } from "./generated/openapi.ts";
+import type { AnyMessage, NewSessionRequest } from "acp-http-client";
+import type { components, operations } from "./generated/openapi.ts";
 
-type S = components["schemas"];
+export type ProblemDetails = components["schemas"]["ProblemDetails"];
 
-export type AgentCapabilities = S["AgentCapabilities"];
-export type AgentInfo = S["AgentInfo"];
-export type AgentInstallRequest = S["AgentInstallRequest"];
-export type AgentListResponse = S["AgentListResponse"];
-export type AgentModelInfo = S["AgentModelInfo"];
-export type AgentModelsResponse = S["AgentModelsResponse"];
-export type AgentModeInfo = S["AgentModeInfo"];
-export type AgentModesResponse = S["AgentModesResponse"];
-export type AgentUnparsedData = S["AgentUnparsedData"];
-export type ContentPart = S["ContentPart"];
-export type CreateSessionRequest = S["CreateSessionRequest"];
-export type CreateSessionResponse = S["CreateSessionResponse"];
-export type ErrorData = S["ErrorData"];
-export type EventSource = S["EventSource"];
-export type EventsQuery = S["EventsQuery"];
-export type EventsResponse = S["EventsResponse"];
-export type FileAction = S["FileAction"];
-export type FsActionResponse = S["FsActionResponse"];
-export type FsDeleteQuery = S["FsDeleteQuery"];
-export type FsEntriesQuery = S["FsEntriesQuery"];
-export type FsEntry = S["FsEntry"];
-export type FsEntryType = S["FsEntryType"];
-export type FsMoveRequest = S["FsMoveRequest"];
-export type FsMoveResponse = S["FsMoveResponse"];
-export type FsPathQuery = S["FsPathQuery"];
-export type FsSessionQuery = S["FsSessionQuery"];
-export type FsStat = S["FsStat"];
-export type FsUploadBatchQuery = S["FsUploadBatchQuery"];
-export type FsUploadBatchResponse = S["FsUploadBatchResponse"];
-export type FsWriteResponse = S["FsWriteResponse"];
-export type HealthResponse = S["HealthResponse"];
-export type ItemDeltaData = S["ItemDeltaData"];
-export type ItemEventData = S["ItemEventData"];
-export type ItemKind = S["ItemKind"];
-export type ItemRole = S["ItemRole"];
-export type ItemStatus = S["ItemStatus"];
-export type MessageRequest = S["MessageRequest"];
-export type MessageAttachment = S["MessageAttachment"];
-export type PermissionEventData = S["PermissionEventData"];
-export type PermissionReply = S["PermissionReply"];
-export type PermissionReplyRequest = S["PermissionReplyRequest"];
-export type PermissionStatus = S["PermissionStatus"];
-export type ProblemDetails = S["ProblemDetails"];
-export type QuestionEventData = S["QuestionEventData"];
-export type QuestionReplyRequest = S["QuestionReplyRequest"];
-export type QuestionStatus = S["QuestionStatus"];
-export type ReasoningVisibility = S["ReasoningVisibility"];
-export type SessionEndReason = S["SessionEndReason"];
-export type SessionEndedData = S["SessionEndedData"];
-export type SessionInfo = S["SessionInfo"];
-export type SessionListResponse = S["SessionListResponse"];
-export type SessionStartedData = S["SessionStartedData"];
-export type TerminatedBy = S["TerminatedBy"];
-export type TurnStreamQuery = S["TurnStreamQuery"];
-export type UniversalEvent = S["UniversalEvent"];
-export type UniversalEventData = S["UniversalEventData"];
-export type UniversalEventType = S["UniversalEventType"];
-export type UniversalItem = S["UniversalItem"];
+export type HealthResponse = JsonResponse<operations["get_v1_health"], 200>;
+export type AgentListResponse = JsonResponse<operations["get_v1_agents"], 200>;
+export type AgentInfo = components["schemas"]["AgentInfo"];
+export type AgentInstallRequest = JsonRequestBody<operations["post_v1_agent_install"]>;
+export type AgentInstallResponse = JsonResponse<operations["post_v1_agent_install"], 200>;
 
-export type McpServerConfig = S["McpServerConfig"];
-export type McpCommand = S["McpCommand"];
-export type McpRemoteTransport = S["McpRemoteTransport"];
-export type McpOAuthConfig = S["McpOAuthConfig"];
-export type McpOAuthConfigOrDisabled = S["McpOAuthConfigOrDisabled"];
-export type SkillSource = S["SkillSource"];
-export type SkillsConfig = S["SkillsConfig"];
+export type AcpEnvelope = components["schemas"]["AcpEnvelope"];
+export type AcpServerInfo = components["schemas"]["AcpServerInfo"];
+export type AcpServerListResponse = JsonResponse<operations["get_v1_acp_servers"], 200>;
+
+export type FsEntriesQuery = QueryParams<operations["get_v1_fs_entries"]>;
+export type FsEntry = components["schemas"]["FsEntry"];
+export type FsPathQuery = QueryParams<operations["get_v1_fs_file"]>;
+export type FsDeleteQuery = QueryParams<operations["delete_v1_fs_entry"]>;
+export type FsUploadBatchQuery = QueryParams<operations["post_v1_fs_upload_batch"]>;
+export type FsWriteResponse = JsonResponse<operations["put_v1_fs_file"], 200>;
+export type FsActionResponse = JsonResponse<operations["delete_v1_fs_entry"], 200>;
+export type FsMoveRequest = JsonRequestBody<operations["post_v1_fs_move"]>;
+export type FsMoveResponse = JsonResponse<operations["post_v1_fs_move"], 200>;
+export type FsStat = JsonResponse<operations["get_v1_fs_stat"], 200>;
+export type FsUploadBatchResponse = JsonResponse<operations["post_v1_fs_upload_batch"], 200>;
+
+export type McpConfigQuery = QueryParams<operations["get_v1_config_mcp"]>;
+export type McpServerConfig = components["schemas"]["McpServerConfig"];
+
+export type SkillsConfigQuery = QueryParams<operations["get_v1_config_skills"]>;
+export type SkillsConfig = components["schemas"]["SkillsConfig"];
+
+export interface SessionRecord {
+  id: string;
+  agent: string;
+  agentSessionId: string;
+  lastConnectionId: string;
+  createdAt: number;
+  destroyedAt?: number;
+  sessionInit?: Omit<NewSessionRequest, "_meta">;
+}
+
+export type SessionEventSender = "client" | "agent";
+
+export interface SessionEvent {
+  // Stable unique event id. For ordering, sort by (sessionId, eventIndex).
+  id: string;
+  eventIndex: number;
+  sessionId: string;
+  createdAt: number;
+  connectionId: string;
+  sender: SessionEventSender;
+  payload: AnyMessage;
+}
+
+export interface ListPageRequest {
+  cursor?: string;
+  limit?: number;
+}
+
+export interface ListPage<T> {
+  items: T[];
+  nextCursor?: string;
+}
+
+export interface ListEventsRequest extends ListPageRequest {
+  sessionId: string;
+}
+
+export interface SessionPersistDriver {
+  getSession(id: string): Promise<SessionRecord | null>;
+  listSessions(request?: ListPageRequest): Promise<ListPage<SessionRecord>>;
+  updateSession(session: SessionRecord): Promise<void>;
+  listEvents(request: ListEventsRequest): Promise<ListPage<SessionEvent>>;
+  insertEvent(event: SessionEvent): Promise<void>;
+}
+
+export interface InMemorySessionPersistDriverOptions {
+  maxSessions?: number;
+  maxEventsPerSession?: number;
+}
+
+const DEFAULT_MAX_SESSIONS = 1024;
+const DEFAULT_MAX_EVENTS_PER_SESSION = 500;
+const DEFAULT_LIST_LIMIT = 100;
+
+export class InMemorySessionPersistDriver implements SessionPersistDriver {
+  private readonly maxSessions: number;
+  private readonly maxEventsPerSession: number;
+  private readonly sessions = new Map<string, SessionRecord>();
+  private readonly eventsBySession = new Map<string, SessionEvent[]>();
+
+  constructor(options: InMemorySessionPersistDriverOptions = {}) {
+    this.maxSessions = normalizeCap(options.maxSessions, DEFAULT_MAX_SESSIONS);
+    this.maxEventsPerSession = normalizeCap(
+      options.maxEventsPerSession,
+      DEFAULT_MAX_EVENTS_PER_SESSION,
+    );
+  }
+
+  async getSession(id: string): Promise<SessionRecord | null> {
+    const session = this.sessions.get(id);
+    return session ? cloneSessionRecord(session) : null;
+  }
+
+  async listSessions(request: ListPageRequest = {}): Promise<ListPage<SessionRecord>> {
+    const sorted = [...this.sessions.values()].sort((a, b) => {
+      if (a.createdAt !== b.createdAt) {
+        return a.createdAt - b.createdAt;
+      }
+      return a.id.localeCompare(b.id);
+    });
+    const page = paginate(sorted, request);
+    return {
+      items: page.items.map(cloneSessionRecord),
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  async updateSession(session: SessionRecord): Promise<void> {
+    this.sessions.set(session.id, { ...session });
+
+    if (!this.eventsBySession.has(session.id)) {
+      this.eventsBySession.set(session.id, []);
+    }
+
+    if (this.sessions.size <= this.maxSessions) {
+      return;
+    }
+
+    const overflow = this.sessions.size - this.maxSessions;
+    const removable = [...this.sessions.values()]
+      .sort((a, b) => {
+        if (a.createdAt !== b.createdAt) {
+          return a.createdAt - b.createdAt;
+        }
+        return a.id.localeCompare(b.id);
+      })
+      .slice(0, overflow)
+      .map((sessionToRemove) => sessionToRemove.id);
+
+    for (const sessionId of removable) {
+      this.sessions.delete(sessionId);
+      this.eventsBySession.delete(sessionId);
+    }
+  }
+
+  async listEvents(request: ListEventsRequest): Promise<ListPage<SessionEvent>> {
+    const all = [...(this.eventsBySession.get(request.sessionId) ?? [])].sort((a, b) => {
+      if (a.eventIndex !== b.eventIndex) {
+        return a.eventIndex - b.eventIndex;
+      }
+      return a.id.localeCompare(b.id);
+    });
+    const page = paginate(all, request);
+    return {
+      items: page.items.map(cloneSessionEvent),
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  async insertEvent(event: SessionEvent): Promise<void> {
+    const events = this.eventsBySession.get(event.sessionId) ?? [];
+    events.push(cloneSessionEvent(event));
+
+    if (events.length > this.maxEventsPerSession) {
+      events.splice(0, events.length - this.maxEventsPerSession);
+    }
+
+    this.eventsBySession.set(event.sessionId, events);
+  }
+}
+
+function cloneSessionRecord(session: SessionRecord): SessionRecord {
+  return {
+    ...session,
+    sessionInit: session.sessionInit
+      ? (JSON.parse(JSON.stringify(session.sessionInit)) as SessionRecord["sessionInit"])
+      : undefined,
+  };
+}
+
+function cloneSessionEvent(event: SessionEvent): SessionEvent {
+  return {
+    ...event,
+    payload: JSON.parse(JSON.stringify(event.payload)) as AnyMessage,
+  };
+}
+
+type ResponsesOf<T> = T extends { responses: infer R } ? R : never;
+type JsonResponse<T, StatusCode extends keyof ResponsesOf<T>> = ResponsesOf<T>[StatusCode] extends {
+  content: { "application/json": infer B };
+}
+  ? B
+  : never;
+
+type JsonRequestBody<T> = T extends {
+  requestBody: { content: { "application/json": infer B } };
+}
+  ? B
+  : never;
+
+type QueryParams<T> = T extends { parameters: { query: infer Q } }
+  ? Q
+  : T extends { parameters: { query?: infer Q } }
+    ? Q
+    : never;
+
+function normalizeCap(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || (value ?? 0) < 1) {
+    return fallback;
+  }
+  return Math.floor(value as number);
+}
+
+function paginate<T>(items: T[], request: ListPageRequest): ListPage<T> {
+  const offset = parseCursor(request.cursor);
+  const limit = normalizeCap(request.limit, DEFAULT_LIST_LIMIT);
+  const slice = items.slice(offset, offset + limit);
+  const nextOffset = offset + slice.length;
+  return {
+    items: slice,
+    nextCursor: nextOffset < items.length ? String(nextOffset) : undefined,
+  };
+}
+
+function parseCursor(cursor: string | undefined): number {
+  if (!cursor) {
+    return 0;
+  }
+  const parsed = Number.parseInt(cursor, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
+}

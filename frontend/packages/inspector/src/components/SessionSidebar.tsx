@@ -1,17 +1,26 @@
 import { Plus, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { AgentInfo, AgentModelInfo, AgentModeInfo, SessionInfo, SkillSource } from "sandbox-agent";
-import type { McpServerEntry } from "../App";
+import type { AgentInfo } from "sandbox-agent";
+
+type AgentModeInfo = { id: string; name: string; description: string };
+type AgentModelInfo = { id: string; name?: string };
 import SessionCreateMenu, { type SessionConfig } from "./SessionCreateMenu";
+
+type SessionListItem = {
+  sessionId: string;
+  agent: string;
+  ended: boolean;
+};
 
 const agentLabels: Record<string, string> = {
   claude: "Claude Code",
   codex: "Codex",
   opencode: "OpenCode",
   amp: "Amp",
-  codebuff: "Codebuff",
-  mock: "Mock"
+  pi: "Pi",
+  cursor: "Cursor"
 };
+const persistenceDocsUrl = "https://sandboxagent.dev/docs/session-persistence";
 
 const SessionSidebar = ({
   sessions,
@@ -28,22 +37,13 @@ const SessionSidebar = ({
   modesByAgent,
   modelsByAgent,
   defaultModelByAgent,
-  modesLoadingByAgent,
-  modelsLoadingByAgent,
-  modesErrorByAgent,
-  modelsErrorByAgent,
-  mcpServers,
-  onMcpServersChange,
-  mcpConfigError,
-  skillSources,
-  onSkillSourcesChange
 }: {
-  sessions: SessionInfo[];
+  sessions: SessionListItem[];
   selectedSessionId: string;
-  onSelectSession: (session: SessionInfo) => void;
+  onSelectSession: (session: SessionListItem) => void;
   onRefresh: () => void;
   onCreateSession: (agentId: string, config: SessionConfig) => void;
-  onSelectAgent: (agentId: string) => void;
+  onSelectAgent: (agentId: string) => Promise<void>;
   agents: AgentInfo[];
   agentsLoading: boolean;
   agentsError: string | null;
@@ -52,15 +52,6 @@ const SessionSidebar = ({
   modesByAgent: Record<string, AgentModeInfo[]>;
   modelsByAgent: Record<string, AgentModelInfo[]>;
   defaultModelByAgent: Record<string, string>;
-  modesLoadingByAgent: Record<string, boolean>;
-  modelsLoadingByAgent: Record<string, boolean>;
-  modesErrorByAgent: Record<string, string | null>;
-  modelsErrorByAgent: Record<string, string | null>;
-  mcpServers: McpServerEntry[];
-  onMcpServersChange: (servers: McpServerEntry[]) => void;
-  mcpConfigError: string | null;
-  skillSources: SkillSource[];
-  onSkillSourcesChange: (sources: SkillSource[]) => void;
 }) => {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -76,7 +67,6 @@ const SessionSidebar = ({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showMenu]);
-
 
   return (
     <div className="session-sidebar">
@@ -101,17 +91,8 @@ const SessionSidebar = ({
               modesByAgent={modesByAgent}
               modelsByAgent={modelsByAgent}
               defaultModelByAgent={defaultModelByAgent}
-              modesLoadingByAgent={modesLoadingByAgent}
-              modelsLoadingByAgent={modelsLoadingByAgent}
-              modesErrorByAgent={modesErrorByAgent}
-              modelsErrorByAgent={modelsErrorByAgent}
-              mcpServers={mcpServers}
-              onMcpServersChange={onMcpServersChange}
-              mcpConfigError={mcpConfigError}
-              skillSources={skillSources}
-              onSkillSourcesChange={onSkillSourcesChange}
-              onSelectAgent={onSelectAgent}
               onCreateSession={onCreateSession}
+              onSelectAgent={onSelectAgent}
               open={showMenu}
               onClose={() => setShowMenu(false)}
             />
@@ -136,12 +117,18 @@ const SessionSidebar = ({
               <div className="session-item-id">{session.sessionId}</div>
               <div className="session-item-meta">
                 <span className="session-item-agent">{agentLabels[session.agent] ?? session.agent}</span>
-                <span className="session-item-events">{session.eventCount} events</span>
                 {session.ended && <span className="session-item-ended">ended</span>}
               </div>
             </button>
           ))
         )}
+      </div>
+      <div className="session-persistence-note">
+        Sessions are persisted in your browser using IndexedDB.{" "}
+        <a href={persistenceDocsUrl} target="_blank" rel="noreferrer">
+          Configure persistence
+        </a>
+        .
       </div>
     </div>
   );

@@ -9,7 +9,7 @@ Research notes on OpenAI Codex's configuration, credential discovery, and runtim
 - **Execution Method (alternatives)**: SDK (`@openai/codex-sdk`) or CLI binary
 - **Session Persistence**: Thread ID (string)
 - **Import**: Dynamic import to avoid bundling issues
-- **Binary Location**: `~/.nvm/versions/node/v24.3.0/bin/codex` (npm global install)
+- **Binary Location**: `~/.nvm/versions/node/current/bin/codex` (npm global install)
 
 ## SDK Architecture
 
@@ -156,6 +156,41 @@ The server can send JSON-RPC requests (with `id`) for approvals:
 - `item/fileChange/requestApproval`
 
 These require JSON-RPC responses with a decision payload.
+
+## App Server WebSocket Transport (Experimental)
+
+Codex app-server also supports an experimental WebSocket transport:
+
+```bash
+codex app-server --listen ws://127.0.0.1:4500
+```
+
+### Transport constraints
+
+- Listen URL must be `ws://IP:PORT` (not `localhost`, not `http://...`)
+- One JSON-RPC message per WebSocket text frame
+- Incoming: text frame JSON is parsed as a JSON-RPC message
+- Outgoing: JSON-RPC messages are serialized and sent as text frames
+- Ping/Pong is handled; binary frames are ignored
+
+### Connection lifecycle
+
+- Each accepted socket becomes a distinct connection with its own session state
+- Every connection must send `initialize` first
+- Sending non-`initialize` requests before init returns `"Not initialized"`
+- Sending `initialize` twice on the same connection returns `"Already initialized"`
+- Broadcast notifications are only sent to initialized connections
+
+### Operational notes
+
+- WebSocket mode is currently marked experimental/unsupported upstream
+- It is a raw WS server (no built-in TLS/auth); keep it on loopback or place it behind your own secure proxy/tunnel
+
+### Upstream implementation references (openai/codex `main`, commit `03adb5db`)
+
+- `codex-rs/app-server/src/transport.rs`
+- `codex-rs/app-server/src/message_processor.rs`
+- `codex-rs/app-server/README.md`
 
 ## Response Schema
 

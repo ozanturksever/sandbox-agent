@@ -31,10 +31,12 @@ describe("OpenCode-compatible Model API", () => {
     const providers = response.data?.all ?? [];
     const mockProvider = providers.find((entry) => entry.id === "mock");
     const ampProvider = providers.find((entry) => entry.id === "amp");
+    const piProvider = providers.find((entry) => entry.id === "pi");
     const sandboxProvider = providers.find((entry) => entry.id === "sandbox-agent");
     expect(sandboxProvider).toBeUndefined();
     expect(mockProvider).toBeDefined();
     expect(ampProvider).toBeDefined();
+    expect(piProvider).toBeDefined();
 
     const mockModels = mockProvider?.models ?? {};
     expect(mockModels["mock"]).toBeDefined();
@@ -42,11 +44,24 @@ describe("OpenCode-compatible Model API", () => {
     expect(mockModels["mock"].family).toBe("Mock");
 
     const ampModels = ampProvider?.models ?? {};
-    expect(ampModels["smart"]).toBeDefined();
-    expect(ampModels["smart"].id).toBe("smart");
-    expect(ampModels["smart"].family).toBe("Amp");
+    expect(ampModels["amp-default"]).toBeDefined();
+    expect(ampModels["amp-default"].id).toBe("amp-default");
+    expect(ampModels["amp-default"].family).toBe("Amp");
 
     expect(response.data?.default?.["mock"]).toBe("mock");
-    expect(response.data?.default?.["amp"]).toBe("smart");
+    expect(response.data?.default?.["amp"]).toBe("amp-default");
+  });
+
+  it("should keep provider backends visible when discovery is degraded", async () => {
+    const response = await client.provider.list();
+    const providers = response.data?.all ?? [];
+    const providerIds = new Set(providers.map((provider) => provider.id));
+
+    expect(providerIds.has("claude")).toBe(true);
+    expect(providerIds.has("codex")).toBe(true);
+    expect(providerIds.has("pi")).toBe(true);
+    expect(
+      providerIds.has("opencode") || Array.from(providerIds).some((id) => id.startsWith("opencode:"))
+    ).toBe(true);
   });
 });
