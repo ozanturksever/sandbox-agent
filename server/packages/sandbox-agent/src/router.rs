@@ -79,6 +79,7 @@ pub struct AppState {
     opencode_server_manager: Arc<OpenCodeServerManager>,
     pub(crate) branding: BrandingMode,
     version_cache: Mutex<HashMap<AgentId, CachedAgentVersion>>,
+    pub(crate) terminal_manager: Arc<crate::terminal::TerminalManager>,
 }
 
 impl AppState {
@@ -107,11 +108,16 @@ impl AppState {
             opencode_server_manager,
             branding,
             version_cache: Mutex::new(HashMap::new()),
+            terminal_manager: Arc::new(crate::terminal::TerminalManager::new()),
         }
     }
 
     pub(crate) fn acp_proxy(&self) -> Arc<AcpProxyRuntime> {
         self.acp_proxy.clone()
+    }
+
+    pub(crate) fn auth(&self) -> &AuthConfig {
+        &self.auth
     }
 
     pub(crate) fn agent_manager(&self) -> Arc<AgentManager> {

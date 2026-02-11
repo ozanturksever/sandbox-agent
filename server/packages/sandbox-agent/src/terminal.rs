@@ -664,7 +664,7 @@ pub async fn terminal_ws(
     // Validate auth — check query param token or Authorization header.
     // The normal require_token middleware doesn't run on WS upgrade for
     // browser clients that can't set headers, so we check here.
-    if let Some(ref expected) = state.auth.token {
+    if let Some(ref expected) = state.auth().token {
         let provided = query.token.as_deref().or_else(|| {
             headers
                 .get("authorization")
