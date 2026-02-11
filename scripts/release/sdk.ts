@@ -240,12 +240,44 @@ export async function publishNpmCliShared(opts: ReleaseOpts) {
 }
 
 export async function publishNpmSdk(opts: ReleaseOpts) {
+	const isReleaseCandidate = opts.version.includes("-rc.");
+	const tag = isReleaseCandidate ? "rc" : (opts.latest ? "latest" : opts.minorVersionChannel);
+
+	// Publish acp-http-client (dependency of the SDK)
+	{
+		const acpHttpClientPath = join(opts.root, "sdks/acp-http-client");
+		const packageJsonPath = join(acpHttpClientPath, "package.json");
+		const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
+		const name = packageJson.name;
+
+		const versionExists = await npmVersionExists(name, opts.version);
+		if (versionExists) {
+			console.log(
+				`Version ${opts.version} of ${name} already exists. Skipping...`,
+			);
+		} else {
+			console.log(`==> Building acp-http-client`);
+			await $({
+				stdio: "inherit",
+				cwd: opts.root,
+			})`pnpm --filter acp-http-client build`;
+
+			console.log(`==> Publishing to NPM: ${name}@${opts.version}`);
+			await $({
+				stdio: "inherit",
+				cwd: acpHttpClientPath,
+			})`pnpm publish --access public --tag ${tag} --no-git-checks`;
+
+			console.log(`✅ Published ${name}@${opts.version}`);
+		}
+	}
+
+	// Publish SDK
 	const sdkPath = join(opts.root, "sdks/typescript");
 	const packageJsonPath = join(sdkPath, "package.json");
 	const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
 	const name = packageJson.name;
 
-	// Check if version already exists
 	const versionExists = await npmVersionExists(name, opts.version);
 	if (versionExists) {
 		console.log(
@@ -261,13 +293,7 @@ export async function publishNpmSdk(opts: ReleaseOpts) {
 		cwd: opts.root,
 	})`pnpm --filter sandbox-agent build`;
 
-	// Publish
 	console.log(`==> Publishing to NPM: ${name}@${opts.version}`);
-
-	// Add --tag flag for release candidates
-	const isReleaseCandidate = opts.version.includes("-rc.");
-	const tag = isReleaseCandidate ? "rc" : (opts.latest ? "latest" : opts.minorVersionChannel);
-
 	await $({
 		stdio: "inherit",
 		cwd: sdkPath,
