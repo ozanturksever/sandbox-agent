@@ -20,6 +20,10 @@ await sandbox.process.executeCommand(
 	"curl -fsSL https://releases.rivet.dev/sandbox-agent/0.2.x/install.sh | sh",
 );
 
+console.log("Installing agents...");
+await sandbox.process.executeCommand("sandbox-agent install-agent claude");
+await sandbox.process.executeCommand("sandbox-agent install-agent codex");
+
 await sandbox.process.executeCommand(
 	"nohup sandbox-agent server --no-token --host 0.0.0.0 --port 3000 >/tmp/sandbox-agent.log 2>&1 &",
 );
@@ -30,7 +34,7 @@ console.log("Waiting for server...");
 await waitForHealth({ baseUrl });
 
 const client = await SandboxAgent.connect({ baseUrl });
-const session = await client.createSession({ agent: detectAgent(), sessionInit: { cwd: "/root", mcpServers: [] } });
+const session = await client.createSession({ agent: detectAgent(), sessionInit: { cwd: "/home/daytona", mcpServers: [] } });
 const sessionId = session.id;
 
 console.log(`  UI: ${buildInspectorUrl({ baseUrl, sessionId })}`);

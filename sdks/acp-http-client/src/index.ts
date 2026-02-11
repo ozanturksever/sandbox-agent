@@ -450,7 +450,8 @@ class StreamableHttpAcpTransport {
           return;
         }
 
-        this.failReadable(error);
+        // SSE failure is non-fatal: the POST request/response flow still works.
+        // Exiting the loop allows ensureSseLoop() to restart it on the next POST.
         return;
       }
     }

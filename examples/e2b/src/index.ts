@@ -31,7 +31,7 @@ console.log("Waiting for server...");
 await waitForHealth({ baseUrl });
 
 const client = await SandboxAgent.connect({ baseUrl });
-const session = await client.createSession({ agent: detectAgent(), sessionInit: { cwd: "/root", mcpServers: [] } });
+const session = await client.createSession({ agent: detectAgent(), sessionInit: { cwd: "/home/user", mcpServers: [] } });
 const sessionId = session.id;
 
 console.log(`  UI: ${buildInspectorUrl({ baseUrl, sessionId })}`);
