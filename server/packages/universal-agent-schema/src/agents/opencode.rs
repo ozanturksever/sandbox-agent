@@ -292,7 +292,85 @@ pub fn event_to_universal(event: &schema::Event) -> Result<Vec<EventConversion>,
             .with_raw(raw);
             Ok(vec![conversion])
         }
-        _ => Err("unsupported opencode event".to_string()),
+        schema::Event::PermissionReplied(_)
+        | schema::Event::QuestionReplied(_)
+        | schema::Event::QuestionRejected(_) => {
+            let (label, detail) = match event {
+                schema::Event::PermissionReplied(e) => (
+                    "permission.replied",
+                    serde_json::to_string(&e.properties)
+                        .unwrap_or_else(|_| "replied".to_string()),
+                ),
+                schema::Event::QuestionReplied(e) => (
+                    "question.replied",
+                    serde_json::to_string(&e.properties)
+                        .unwrap_or_else(|_| "replied".to_string()),
+                ),
+                schema::Event::QuestionRejected(e) => (
+                    "question.rejected",
+                    serde_json::to_string(&e.properties)
+                        .unwrap_or_else(|_| "rejected".to_string()),
+                ),
+                _ => ("event", String::new()),
+            };
+            let item = status_item(label, Some(detail));
+            Ok(vec![EventConversion::new(
+                UniversalEventType::ItemCompleted,
+                UniversalEventData::Item(ItemEventData { item }),
+            )
+            .with_raw(raw)])
+        }
+        schema::Event::FileEdited(edited) => {
+            let detail = serde_json::to_string(&edited.properties)
+                .unwrap_or_else(|_| "file.edited".to_string());
+            let item = status_item("file.edited", Some(detail));
+            Ok(vec![EventConversion::new(
+                UniversalEventType::ItemCompleted,
+                UniversalEventData::Item(ItemEventData { item }),
+            )
+            .with_raw(raw)])
+        }
+        schema::Event::CommandExecuted(executed) => {
+            let detail = serde_json::to_string(&executed.properties)
+                .unwrap_or_else(|_| "command.executed".to_string());
+            let item = status_item("command.executed", Some(detail));
+            Ok(vec![EventConversion::new(
+                UniversalEventType::ItemCompleted,
+                UniversalEventData::Item(ItemEventData { item }),
+            )
+            .with_raw(raw)])
+        }
+        schema::Event::SessionUpdated(_)
+        | schema::Event::SessionDeleted(_)
+        | schema::Event::SessionDiff(_)
+        | schema::Event::SessionCompacted(_)
+        | schema::Event::MessageRemoved(_)
+        | schema::Event::MessagePartRemoved(_)
+        | schema::Event::TodoUpdated(_)
+        | schema::Event::VcsBranchUpdated(_) => {
+            let detail = serde_json::to_string(event).unwrap_or_else(|_| "event".to_string());
+            let label = match event {
+                schema::Event::SessionUpdated(_) => "session.updated",
+                schema::Event::SessionDeleted(_) => "session.deleted",
+                schema::Event::SessionDiff(_) => "session.diff",
+                schema::Event::SessionCompacted(_) => "session.compacted",
+                schema::Event::MessageRemoved(_) => "message.removed",
+                schema::Event::MessagePartRemoved(_) => "message.part.removed",
+                schema::Event::TodoUpdated(_) => "todo.updated",
+                schema::Event::VcsBranchUpdated(_) => "vcs.branch.updated",
+                _ => "event",
+            };
+            let item = status_item(label, Some(detail));
+            Ok(vec![EventConversion::new(
+                UniversalEventType::ItemCompleted,
+                UniversalEventData::Item(ItemEventData { item }),
+            )
+            .with_raw(raw)])
+        }
+        // Internal/UI events with no universal schema equivalent — silently skip.
+        // Includes: Installation*, Server*, Global*, Lsp*, Tui*, Mcp*, Pty*,
+        // FileWatcher*, Worktree*, Project* events.
+        _ => Ok(vec![]),
     }
 }
 

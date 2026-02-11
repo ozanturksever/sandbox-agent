@@ -24,12 +24,12 @@ use reqwest::Client;
 use sandbox_agent_error::{AgentError, ErrorType, ProblemDetails, SandboxError};
 use sandbox_agent_universal_agent_schema::{
     codex as codex_schema, convert_amp, convert_claude, convert_codebuff, convert_codex,
-    convert_opencode, turn_ended_event, turn_started_event, AgentUnparsedData, ContentPart,
-    ErrorData, EventConversion, EventSource, FileAction, ItemDeltaData, ItemEventData, ItemKind,
-    ItemRole, ItemStatus, PermissionEventData, PermissionStatus, QuestionEventData, QuestionStatus,
-    ReasoningVisibility, SessionEndReason, SessionEndedData, SessionStartedData, StderrOutput,
-    TerminatedBy, TurnEventData, TurnPhase, UniversalEvent, UniversalEventData, UniversalEventType,
-    UniversalItem,
+    convert_opencode, opencode as opencode_schema, turn_ended_event, turn_started_event,
+    AgentUnparsedData, ContentPart, ErrorData, EventConversion, EventSource, FileAction,
+    ItemDeltaData, ItemEventData, ItemKind, ItemRole, ItemStatus, PermissionEventData,
+    PermissionStatus, QuestionEventData, QuestionStatus, ReasoningVisibility, SessionEndReason,
+    SessionEndedData, SessionStartedData, StderrOutput, TerminatedBy, TurnEventData, TurnPhase,
+    UniversalEvent, UniversalEventData, UniversalEventType, UniversalItem,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -3624,6 +3624,7 @@ impl SessionManager {
                     }
                 })?;
                 if session.opencode_stream_started {
+                    tracing::info!(%session_id, "opencode SSE stream already started, skipping");
                     return Ok(());
                 }
                 let native_session_id = session.native_session_id.clone().ok_or_else(|| {
@@ -3635,11 +3636,14 @@ impl SessionManager {
                 native_session_id
             };
 
+        tracing::info!(%session_id, %native_session_id, "spawning opencode SSE stream task");
         let manager = Arc::clone(self);
         tokio::spawn(async move {
+            tracing::info!(%session_id, %native_session_id, "opencode SSE stream task started");
             manager
-                .stream_opencode_events(session_id, native_session_id)
+                .stream_opencode_events(session_id.clone(), native_session_id)
                 .await;
+            tracing::warn!(%session_id, "opencode SSE stream task ended");
         });
 
         Ok(())
@@ -3650,9 +3654,11 @@ impl SessionManager {
         session_id: String,
         native_session_id: String,
     ) {
+        tracing::debug!(%session_id, %native_session_id, "stream_opencode_events: resolving server");
         let base_url = match self.ensure_opencode_server().await {
             Ok(base_url) => base_url,
             Err(err) => {
+                tracing::error!(%session_id, %err, "stream_opencode_events: ensure_opencode_server failed");
                 self.record_error(
                     &session_id,
                     format!("failed to start OpenCode server: {err}"),
@@ -3675,9 +3681,11 @@ impl SessionManager {
         };
 
         let url = format!("{base_url}/event");
-        let response = match self.http_client.get(url).send().await {
+        tracing::info!(%session_id, %url, "stream_opencode_events: connecting to SSE endpoint");
+        let response = match self.http_client.get(&url).send().await {
             Ok(response) => response,
             Err(err) => {
+                tracing::error!(%session_id, %url, %err, "stream_opencode_events: SSE connection failed");
                 self.record_error(
                     &session_id,
                     format!("OpenCode SSE connection failed: {err}"),
@@ -3699,9 +3707,11 @@ impl SessionManager {
             }
         };
 
-        if !response.status().is_success() {
-            let status = response.status();
+        let status = response.status();
+        tracing::info!(%session_id, %status, "stream_opencode_events: SSE response received");
+        if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            tracing::error!(%session_id, %status, %body, "stream_opencode_events: SSE error response");
             self.record_error(
                 &session_id,
                 format!("OpenCode SSE error {status}: {body}"),
@@ -3722,12 +3732,17 @@ impl SessionManager {
             return;
         }
 
+        tracing::debug!(%session_id, "stream_opencode_events: entering SSE stream loop");
         let mut accumulator = SseAccumulator::new();
         let mut stream = response.bytes_stream();
+        let mut chunk_count: u64 = 0;
+        let mut event_count: u64 = 0;
+        let mut matched_count: u64 = 0;
         while let Some(chunk) = stream.next().await {
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(err) => {
+                    tracing::error!(%session_id, %err, chunk_count, "stream_opencode_events: stream error");
                     self.record_error(
                         &session_id,
                         format!("OpenCode SSE stream error: {err}"),
@@ -3748,11 +3763,15 @@ impl SessionManager {
                     return;
                 }
             };
+            chunk_count += 1;
             let text = String::from_utf8_lossy(&chunk);
+            tracing::debug!(%session_id, chunk_count, chunk_len = chunk.len(), "stream_opencode_events: chunk received");
             for event_payload in accumulator.push(&text) {
+                event_count += 1;
                 let value: Value = match serde_json::from_str(&event_payload) {
                     Ok(value) => value,
                     Err(err) => {
+                        tracing::warn!(%session_id, %err, "stream_opencode_events: JSON parse error");
                         let conversion = agent_unparsed(
                             "opencode",
                             &err.to_string(),
@@ -3762,19 +3781,40 @@ impl SessionManager {
                         continue;
                     }
                 };
+                let event_type = value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                tracing::debug!(%session_id, event_count, %event_type, "stream_opencode_events: SSE event");
                 if !opencode_event_matches_session(&value, &native_session_id) {
+                    let found_id = extract_opencode_session_id(&value);
+                    tracing::debug!(%session_id, %native_session_id, ?found_id, %event_type, "stream_opencode_events: session mismatch, skipping");
                     continue;
                 }
-                let conversions = match serde_json::from_value(value.clone()) {
-                    Ok(event) => match convert_opencode::event_to_universal(&event) {
+                matched_count += 1;
+                let conversions = match typed_opencode_event(&event_type, &value) {
+                    Some(Ok(event)) => match convert_opencode::event_to_universal(&event) {
                         Ok(conversions) => conversions,
-                        Err(err) => vec![agent_unparsed("opencode", &err, value.clone())],
+                        Err(err) => {
+                            tracing::warn!(%session_id, %err, %event_type, "stream_opencode_events: event_to_universal error");
+                            vec![agent_unparsed("opencode", &err, value.clone())]
+                        }
                     },
-                    Err(err) => vec![agent_unparsed("opencode", &err.to_string(), value.clone())],
+                    Some(Err(err)) => {
+                        tracing::warn!(%session_id, %err, %event_type, "stream_opencode_events: typed deserialization error");
+                        vec![agent_unparsed("opencode", &err.to_string(), value.clone())]
+                    }
+                    None => {
+                        tracing::debug!(%session_id, %event_type, "stream_opencode_events: unmapped event type, skipping");
+                        vec![]
+                    }
                 };
+                tracing::debug!(%session_id, matched_count, num_conversions = conversions.len(), %event_type, "stream_opencode_events: recording conversions");
                 let _ = self.record_conversions(&session_id, conversions).await;
             }
         }
+        tracing::warn!(%session_id, chunk_count, event_count, matched_count, "stream_opencode_events: SSE stream ended");
     }
 
     async fn ensure_opencode_server(&self) -> Result<String, SandboxError> {
@@ -7264,6 +7304,87 @@ mod tests {
             "prefix dir should be stripped"
         );
     }
+
+    // ---- typed_opencode_event dispatch tests ----
+
+    #[test]
+    fn typed_opencode_event_dispatches_session_idle() {
+        let value = serde_json::json!({
+            "type": "session.idle",
+            "properties": { "sessionID": "ses_abc" }
+        });
+        let result = typed_opencode_event("session.idle", &value);
+        assert!(result.is_some(), "known event type should return Some");
+        let event = result.unwrap().expect("should deserialize successfully");
+        assert!(matches!(event, opencode_schema::Event::SessionIdle(_)));
+    }
+
+    #[test]
+    fn typed_opencode_event_dispatches_session_status() {
+        let value = serde_json::json!({
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses_abc",
+                "status": { "type": "busy" }
+            }
+        });
+        let result = typed_opencode_event("session.status", &value);
+        assert!(result.is_some());
+        let event = result.unwrap().expect("should deserialize successfully");
+        assert!(matches!(event, opencode_schema::Event::SessionStatus(_)));
+    }
+
+    #[test]
+    fn typed_opencode_event_dispatches_file_edited() {
+        let value = serde_json::json!({
+            "type": "file.edited",
+            "properties": { "file": "/tmp/test.rs" }
+        });
+        let result = typed_opencode_event("file.edited", &value);
+        assert!(result.is_some());
+        let event = result.unwrap().expect("should deserialize successfully");
+        assert!(matches!(event, opencode_schema::Event::FileEdited(_)));
+    }
+
+    #[test]
+    fn typed_opencode_event_dispatches_message_part_updated() {
+        let value = serde_json::json!({
+            "type": "message.part.updated",
+            "properties": {
+                "part": {
+                    "type": "text",
+                    "id": "part_1",
+                    "messageID": "msg_1",
+                    "sessionID": "ses_abc",
+                    "text": "Hello world"
+                },
+                "delta": "Hello"
+            }
+        });
+        let result = typed_opencode_event("message.part.updated", &value);
+        assert!(result.is_some());
+        let event = result.unwrap().expect("should deserialize successfully");
+        if let opencode_schema::Event::MessagePartUpdated(e) = event {
+            assert_eq!(e.properties.delta.as_deref(), Some("Hello"));
+        } else {
+            panic!("expected MessagePartUpdated variant");
+        }
+    }
+
+    #[test]
+    fn typed_opencode_event_returns_none_for_unknown_type() {
+        let value = serde_json::json!({"type": "unknown.event", "properties": {}});
+        let result = typed_opencode_event("unknown.event", &value);
+        assert!(result.is_none(), "unknown event type should return None");
+    }
+
+    #[test]
+    fn typed_opencode_event_returns_err_for_malformed_json() {
+        let value = serde_json::json!({"type": "session.idle"});
+        let result = typed_opencode_event("session.idle", &value);
+        assert!(result.is_some(), "known type should return Some even if malformed");
+        assert!(result.unwrap().is_err(), "missing required 'properties' should fail deserialization");
+    }
 }
 
 fn install_skill_sources(sources: &[SkillSource]) -> Result<Vec<PathBuf>, SandboxError> {
@@ -9048,6 +9169,43 @@ fn parse_agent_line(agent: AgentId, line: &str, session_id: &str) -> Vec<EventCo
             "mock agent does not parse streaming output",
             value,
         )],
+    }
+}
+
+/// Manually dispatch OpenCode event JSON to the correct `Event` variant by
+/// inspecting the `type` field.  The auto-generated `Event` enum uses
+/// `#[serde(untagged)]` which causes earlier variants to "steal" the
+/// deserialization from the correct one.  By deserializing directly into the
+/// specific struct we bypass the untagged enum entirely.
+fn typed_opencode_event(
+    event_type: &str,
+    value: &Value,
+) -> Option<Result<opencode_schema::Event, serde_json::Error>> {
+    use opencode_schema::Event;
+    match event_type {
+        "message.updated" => Some(serde_json::from_value(value.clone()).map(Event::MessageUpdated)),
+        "message.part.updated" => Some(serde_json::from_value(value.clone()).map(Event::MessagePartUpdated)),
+        "message.removed" => Some(serde_json::from_value(value.clone()).map(Event::MessageRemoved)),
+        "message.part.removed" => Some(serde_json::from_value(value.clone()).map(Event::MessagePartRemoved)),
+        "session.status" => Some(serde_json::from_value(value.clone()).map(Event::SessionStatus)),
+        "session.idle" => Some(serde_json::from_value(value.clone()).map(Event::SessionIdle)),
+        "session.error" => Some(serde_json::from_value(value.clone()).map(Event::SessionError)),
+        "session.created" => Some(serde_json::from_value(value.clone()).map(Event::SessionCreated)),
+        "session.updated" => Some(serde_json::from_value(value.clone()).map(Event::SessionUpdated)),
+        "session.deleted" => Some(serde_json::from_value(value.clone()).map(Event::SessionDeleted)),
+        "session.diff" => Some(serde_json::from_value(value.clone()).map(Event::SessionDiff)),
+        "session.compacted" => Some(serde_json::from_value(value.clone()).map(Event::SessionCompacted)),
+        "permission.asked" => Some(serde_json::from_value(value.clone()).map(Event::PermissionAsked)),
+        "permission.replied" => Some(serde_json::from_value(value.clone()).map(Event::PermissionReplied)),
+        "question.asked" => Some(serde_json::from_value(value.clone()).map(Event::QuestionAsked)),
+        "question.replied" => Some(serde_json::from_value(value.clone()).map(Event::QuestionReplied)),
+        "question.rejected" => Some(serde_json::from_value(value.clone()).map(Event::QuestionRejected)),
+        "file.edited" => Some(serde_json::from_value(value.clone()).map(Event::FileEdited)),
+        "command.executed" => Some(serde_json::from_value(value.clone()).map(Event::CommandExecuted)),
+        "todo.updated" => Some(serde_json::from_value(value.clone()).map(Event::TodoUpdated)),
+        "vcs.branch.updated" => Some(serde_json::from_value(value.clone()).map(Event::VcsBranchUpdated)),
+        "installation.updated" => Some(serde_json::from_value(value.clone()).map(Event::InstallationUpdated)),
+        _ => None,
     }
 }
 
