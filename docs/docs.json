@@ -57,6 +57,7 @@
 								"icon": "server",
 								"pages": [
 									"deploy/local",
+									"deploy/computesdk",
 									"deploy/e2b",
 									"deploy/daytona",
 									"deploy/vercel",
