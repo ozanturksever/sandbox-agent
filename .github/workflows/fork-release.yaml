@@ -7,6 +7,11 @@ on:
         description: 'Release tag (e.g. v0.2.0-fork.1)'
         required: true
         type: string
+      build_docker:
+        description: 'Build and push Docker images'
+        required: false
+        type: boolean
+        default: false
 
 defaults:
   run:
@@ -95,6 +100,7 @@ jobs:
   # ===========================================================================
   docker:
     name: "Docker ${{ matrix.variant }}"
+    if: ${{ inputs.build_docker }}
     needs: [build]
     runs-on: ubuntu-24.04
     permissions:
@@ -177,7 +183,7 @@ jobs:
   release:
     name: "Create Release"
     needs: [build, docker]
-    if: ${{ always() && needs.build.result == 'success' }}
+    if: ${{ always() && needs.build.result == 'success' && (needs.docker.result == 'success' || needs.docker.result == 'skipped') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -204,8 +210,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DOCKER_NOTE="**Docker images (multi-arch: amd64 + arm64):**"
-          DOCKER_NOTE="${DOCKER_NOTE}
+          NOTES=""
+          if [ "${{ inputs.build_docker }}" = "true" ]; then
+            NOTES="**Docker images (multi-arch: amd64 + arm64):**
           \`\`\`bash
           # Runtime (with git, curl, ca-certs)
           docker pull ${{ env.DOCKER_IMAGE }}:${{ inputs.tag }}
@@ -213,9 +220,10 @@ jobs:
           # Binary-only (minimal, for COPY --from)
           docker pull ${{ env.DOCKER_IMAGE }}-binary:${{ inputs.tag }}
           \`\`\`"
+          fi
 
           gh release create "${{ inputs.tag }}" \
             --title "${{ inputs.tag }}" \
-            --notes "${DOCKER_NOTE}" \
+            --notes "${NOTES}" \
             --generate-notes \
             artifacts/*
