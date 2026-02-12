@@ -1,0 +1,119 @@
+name: Fork Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.2.0-fork.1)'
+        required: true
+        type: string
+
+defaults:
+  run:
+    shell: bash -e {0}
+
+env:
+  CARGO_INCREMENTAL: 0
+  SKIP_OPENAPI_GEN: 1
+
+jobs:
+  build:
+    name: "Build ${{ matrix.target }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: x86_64-apple-darwin
+            runner: macos-13
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-pc-windows-gnu
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Linux & Windows: use Docker cross-compilation ---
+      - name: Build via Docker (Linux/Windows)
+        if: runner.os == 'Linux'
+        run: |
+          docker/release/build.sh ${{ matrix.target }} "${{ inputs.tag }}"
+
+      # --- macOS: native cargo build ---
+      - name: Install Rust (macOS)
+        if: runner.os == 'macOS'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm (macOS)
+        if: runner.os == 'macOS'
+        run: npm install -g pnpm
+
+      - name: Build inspector frontend (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pnpm install --filter @sandbox-agent/inspector...
+          cd sdks/cli-shared && pnpm exec tsup && cd ../..
+          cd sdks/acp-http-client && pnpm exec tsup && cd ../..
+          cd sdks/typescript && SKIP_OPENAPI_GEN=1 pnpm exec tsup && cd ../..
+          cd sdks/persist-indexeddb && pnpm exec tsup && cd ../..
+          cd frontend/packages/inspector && pnpm exec vite build && cd ../../..
+
+      - name: Build binary (macOS)
+        if: runner.os == 'macOS'
+        env:
+          SANDBOX_AGENT_VERSION: ${{ inputs.tag }}
+        run: |
+          cargo build -p sandbox-agent -p gigacode --release
+          mkdir -p dist
+          cp target/release/sandbox-agent "dist/sandbox-agent-${{ matrix.target }}"
+          cp target/release/gigacode "dist/gigacode-${{ matrix.target }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    name: "Create Release"
+    needs: [build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binaries-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lah artifacts/
+
+      - name: Create checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.tag }}" \
+            --title "${{ inputs.tag }}" \
+            --generate-notes \
+            artifacts/*
