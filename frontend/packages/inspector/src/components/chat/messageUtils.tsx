@@ -1,13 +1,12 @@
-import type { UniversalItem } from "sandbox-agent";
+import type { TimelineEntry } from "./types";
 import { Settings, AlertTriangle, User } from "lucide-react";
 import type { ReactNode } from "react";
 
-export const getMessageClass = (item: UniversalItem) => {
-  if (item.kind === "tool_call" || item.kind === "tool_result") return "tool";
-  if (item.kind === "system" || item.kind === "status") return "system";
-  if (item.role === "user") return "user";
-  if (item.role === "tool") return "tool";
-  if (item.role === "system") return "system";
+export const getMessageClass = (entry: TimelineEntry) => {
+  if (entry.kind === "tool") return "tool";
+  if (entry.kind === "meta") return entry.meta?.severity === "error" ? "error" : "system";
+  if (entry.kind === "reasoning") return "assistant";
+  if (entry.role === "user") return "user";
   return "assistant";
 };
 
