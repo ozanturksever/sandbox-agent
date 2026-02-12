@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.10.0
+# syntax=docker/dockerfile:1.13.0
 # ============================================================================
 # sandbox-agent binary builder — multi-arch (amd64 + arm64)
 #

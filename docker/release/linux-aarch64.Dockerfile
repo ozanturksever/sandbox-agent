@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.10.0
+# syntax=docker/dockerfile:1.13.0
 
 # Build inspector frontend
 FROM node:22-alpine AS inspector-build
