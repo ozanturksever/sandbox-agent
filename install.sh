@@ -5,6 +5,8 @@ set -euo pipefail
 # Usage: curl -fsSL https://raw.githubusercontent.com/ozanturksever/sandbox-agent/main/install.sh | bash
 #   or:  curl -fsSL ... | bash -s -- --version v0.2.0-fork.1
 #   or:  curl -fsSL ... | bash -s -- --dir /custom/path
+#
+# Docker: docker pull ghcr.io/ozanturksever/sandbox-agent:latest
 
 REPO="ozanturksever/sandbox-agent"
 INSTALL_DIR="${HOME}/.local/bin"

@@ -158,6 +158,16 @@ curl -fsSL https://raw.githubusercontent.com/ozanturksever/sandbox-agent/main/in
 curl -fsSL https://raw.githubusercontent.com/ozanturksever/sandbox-agent/main/install.sh | bash -s -- --gigacode
 ```
 
+**Docker:**
+
+```bash
+# Runtime image (with git, curl, ca-certs)
+docker run --rm -p 2468:2468 ghcr.io/ozanturksever/sandbox-agent:latest server --no-token --host 0.0.0.0 --port 2468
+
+# Binary-only image (for COPY --from in your Dockerfile)
+docker pull ghcr.io/ozanturksever/sandbox-agent-binary:latest
+```
+
 **Install from upstream:**
 
 ```bash
