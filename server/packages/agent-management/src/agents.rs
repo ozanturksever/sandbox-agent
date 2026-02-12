@@ -1304,14 +1304,18 @@ fn parse_version_output(output: &std::process::Output) -> Option<String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{}\n{}", stdout, stderr);
-    combined
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(|line| match line.find(" (") {
-            Some(pos) => line[..pos].to_string(),
-            None => line.to_string(),
-        })
+    let lines: Vec<&str> = combined.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    // Prefer a line that looks like a version (starts with a digit), to skip
+    // noise like "Using environment: dev" that some agents print on stdout.
+    let chosen = lines
+        .iter()
+        .copied()
+        .find(|line| line.starts_with(|c: char| c.is_ascii_digit()))
+        .or_else(|| lines.first().copied())?;
+    Some(match chosen.find(" (") {
+        Some(pos) => chosen[..pos].to_string(),
+        None => chosen.to_string(),
+    })
 }
 
 #[cfg(test)]
