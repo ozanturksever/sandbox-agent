@@ -22,6 +22,21 @@ release-build-all:
 	./docker/release/build.sh x86_64-apple-darwin
 	./docker/release/build.sh aarch64-apple-darwin
 
+# Local release: build all targets + create GitHub Release
+[group('release')]
+release-local tag:
+	./scripts/local-release.sh {{tag}}
+
+# Local release (dry run): build only, no upload
+[group('release')]
+release-local-dry tag:
+	./scripts/local-release.sh {{tag}} --dry-run
+
+# Local release: Linux targets only
+[group('release')]
+release-local-linux tag:
+	./scripts/local-release.sh {{tag}} --targets linux
+
 # =============================================================================
 # Development
 # =============================================================================

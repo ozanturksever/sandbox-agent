@@ -59,76 +59,75 @@ just build
 
 ## Releasing
 
-Releases are managed through a release script that handles version bumps, artifact uploads, npm/crates.io publishing, and GitHub releases.
+Releases are built **locally** and uploaded to GitHub Releases. This avoids CI runner availability issues (especially for ARM) and gives fast, reproducible builds.
 
 ### Prerequisites
 
-1. Install dependencies in the release script directory:
-   ```bash
-   cd scripts/release && pnpm install && cd ../..
-   ```
+- **Docker** — all targets are built inside Docker containers for reproducibility
+- **`gh` CLI** — authenticated (`gh auth login`) for creating GitHub Releases
 
-2. Ensure you have the following configured:
-   - `gh` CLI authenticated
-   - npm authenticated (`npm login`)
-   - `CARGO_REGISTRY_TOKEN` for crates.io (or run `cargo login`)
-   - R2 credentials: `R2_RELEASES_ACCESS_KEY_ID` and `R2_RELEASES_SECRET_ACCESS_KEY`
-     (or 1Password CLI for local dev)
+### Supported Platforms
 
-### Release Commands
+| Target | Architecture | OS |
+|--------|-------------|----|
+| `x86_64-unknown-linux-musl` | amd64 | Linux |
+| `aarch64-unknown-linux-musl` | arm64 | Linux |
+| `x86_64-apple-darwin` | amd64 | macOS |
+| `aarch64-apple-darwin` | arm64 | macOS |
 
-```bash
-# Release with automatic patch bump
-just release --patch
+### Creating a Release
 
-# Release with minor bump
-just release --minor
-
-# Release with specific version
-just release --version 0.2.0
-
-# Release a pre-release
-just release --version 0.2.0-rc.1 --no-latest
-```
-
-### Release Flow
-
-The release process has three phases:
-
-**1. setup-local** (runs locally via `just release`):
-- Confirms release details with user
-- Runs local checks (cargo check, fmt, typecheck)
-- Updates version numbers across all packages
-- Generates artifacts (OpenAPI spec, TypeScript SDK)
-- Commits and pushes changes
-- Triggers the GitHub Actions release workflow
-
-**2. setup-ci** (runs in CI):
-- Runs full test suite (Rust + TypeScript)
-- Builds TypeScript SDK and uploads to R2 at `sandbox-agent/{commit}/typescript/`
-
-**3. binaries** (runs in CI, parallel with setup-ci completing):
-- Builds binaries for all platforms via Docker cross-compilation
-- Uploads binaries to R2 at `sandbox-agent/{commit}/binaries/`
-
-**4. complete-ci** (runs in CI after setup + binaries):
-- Publishes crates to crates.io
-- Publishes npm packages (SDK + CLI)
-- Promotes artifacts from `{commit}/` to `{version}/` (S3-to-S3 copy)
-- Creates git tag and pushes
-- Creates GitHub release with auto-generated notes
-
-### Manual Steps
-
-To run specific steps manually:
+Use `scripts/local-release.sh` (or the `just` shortcuts) to build all binaries and create a GitHub Release:
 
 ```bash
-# Run only local checks
-cd scripts/release && pnpm exec tsx ./main.ts --version 0.1.0 --only-steps run-local-checks
+# Build all 4 targets and create a GitHub Release
+./scripts/local-release.sh v0.2.0-fork.4
+# or
+just release-local v0.2.0-fork.4
 
-# Build binaries locally
-just release-build-all
+# Dry run — build binaries only, no GitHub Release
+./scripts/local-release.sh v0.2.0-fork.4 --dry-run
+# or
+just release-local-dry v0.2.0-fork.4
+
+# Build only Linux targets
+./scripts/local-release.sh v0.2.0-fork.4 --targets linux
+# or
+just release-local-linux v0.2.0-fork.4
+
+# Build only macOS targets
+./scripts/local-release.sh v0.2.0-fork.4 --targets macos
+
+# Build a single target
+./scripts/local-release.sh v0.2.0-fork.4 --targets aarch64-unknown-linux-musl
+
+# Retry without cleaning dist/ (reuses already-built binaries)
+./scripts/local-release.sh v0.2.0-fork.4 --no-clean
 ```
+
+### What the Release Script Does
+
+1. Builds each target via `docker/release/build.sh` (all targets are built inside Docker for reproducibility)
+2. Creates SHA256 checksums (`dist/SHA256SUMS.txt`)
+3. Deletes any existing GitHub Release with the same tag
+4. Creates a new GitHub Release with all binaries attached
+5. Auto-detects your GitHub repo from `git remote`
+
+Binaries are output to `dist/` and include both `sandbox-agent` and `gigacode` for each target.
+
+### Docker Images (Optional)
+
+Docker image builds are **not** part of the default release. If needed, use the GitHub Actions workflow with the Docker option enabled:
+
+1. Go to **GitHub → Actions → "Fork Release"**
+2. Click **"Run workflow"**
+3. Enter the tag and check **"Build and push Docker images"**
+
+This builds multi-arch Docker images (amd64 + arm64) and pushes them to GHCR.
+
+### Upstream Release (not for fork use)
+
+The TypeScript release scripts in `scripts/release/main.ts` are for the **upstream** project's release pipeline. They use Depot runners, R2 storage, npm/crates.io publishing, and Docker Hub. See `just release --help` for details.
 
 ## Project Structure
 
