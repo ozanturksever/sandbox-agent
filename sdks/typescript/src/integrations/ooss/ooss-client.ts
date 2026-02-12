@@ -1,18 +1,11 @@
 /**
  * OOSS-Aware Sandbox Agent Client
  *
- * Wrapper around SandboxAgent that integrates Convex event streaming,
+ * Wrapper around a SandboxAgent-compatible client that integrates Convex event streaming,
  * session persistence, and workspace rules enforcement.
  */
 
-import type { SandboxAgent } from '../../client.ts';
-import type {
-  CreateSessionRequest,
-  CreateSessionResponse,
-  MessageRequest,
-  TurnStreamQuery,
-  UniversalEvent,
-} from '../../types.ts';
+import type { UniversalEvent } from '../../types.ts';
 import type {
   OOSSClientConfig,
   OOSSContext,
@@ -26,22 +19,65 @@ import { AgentFSSessionPersistence } from './session-persistence.ts';
 import { WorkspaceRulesEnforcer } from './workspace-rules.ts';
 
 /**
+ * Request to create a session via OOSS integration.
+ */
+interface OOSSCreateSessionRequest {
+  agent: string;
+  agentMode?: string;
+  permissionMode?: string;
+}
+
+/**
+ * Response from creating a session.
+ */
+interface OOSSCreateSessionResponse {
+  sessionId: string;
+}
+
+/**
+ * Request to send a message in a session turn.
+ */
+interface OOSSMessageRequest {
+  content: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Query parameters for streaming a turn.
+ */
+type OOSSTurnStreamQuery = Record<string, unknown>;
+
+/**
+ * Client interface expected by the OOSS integration.
+ *
+ * SandboxAgent will implement these streaming methods in a future release.
+ * Until then, consumers should provide a compatible adapter.
+ */
+export interface OOSSCompatibleClient {
+  createSession(sessionId: string, request: OOSSCreateSessionRequest): Promise<OOSSCreateSessionResponse>;
+  streamTurn(sessionId: string, request: OOSSMessageRequest, query?: OOSSTurnStreamQuery, signal?: AbortSignal): AsyncIterable<UniversalEvent>;
+  streamEvents(sessionId: string, query?: { afterId?: number }, signal?: AbortSignal): AsyncIterable<UniversalEvent>;
+  terminateSession(sessionId: string): Promise<void>;
+  dispose(): Promise<void>;
+}
+
+/**
  * OOSS-Aware Sandbox Agent
  *
- * Wraps a SandboxAgent client with OOSS integrations:
+ * Wraps a compatible client with OOSS integrations:
  * - Convex event streaming
  * - Session persistence to AgentFS
  * - Workspace rules enforcement
  * - OOSS context injection
  */
 export class OOSSAwareSandboxAgent {
-  private client: SandboxAgent;
+  private client: OOSSCompatibleClient;
   private oossContext: OOSSContext;
   private convexStreamer?: ConvexEventStreamer;
   private sessionPersistence?: AgentFSSessionPersistence;
   private rulesEnforcer?: WorkspaceRulesEnforcer;
 
-  constructor(client: SandboxAgent, config: OOSSClientConfig) {
+  constructor(client: OOSSCompatibleClient, config: OOSSClientConfig) {
     this.client = client;
     this.oossContext = config.oossContext;
 
@@ -64,9 +100,9 @@ export class OOSSAwareSandboxAgent {
   }
 
   /**
-   * Get the underlying SandboxAgent client
+   * Get the underlying client
    */
-  getClient(): SandboxAgent {
+  getClient(): OOSSCompatibleClient {
     return this.client;
   }
 
@@ -112,8 +148,8 @@ export class OOSSAwareSandboxAgent {
    */
   async createSession(
     sessionId: string,
-    request: CreateSessionRequest
-  ): Promise<CreateSessionResponse> {
+    request: OOSSCreateSessionRequest
+  ): Promise<OOSSCreateSessionResponse> {
     // Create session via underlying client
     const response = await this.client.createSession(sessionId, request);
 
@@ -170,8 +206,8 @@ export class OOSSAwareSandboxAgent {
    */
   async *streamTurn(
     sessionId: string,
-    request: MessageRequest,
-    query?: TurnStreamQuery,
+    request: OOSSMessageRequest,
+    query?: OOSSTurnStreamQuery,
     signal?: AbortSignal
   ): AsyncGenerator<UniversalEvent, void, void> {
     try {
@@ -209,7 +245,7 @@ export class OOSSAwareSandboxAgent {
     query?: { afterId?: number },
     signal?: AbortSignal
   ): AsyncGenerator<UniversalEvent, void, void> {
-    for await (const event of this.client.streamEvents(sessionId, query as any, signal)) {
+    for await (const event of this.client.streamEvents(sessionId, query, signal)) {
       // Stream to Convex
       this.convexStreamer?.queueEvent(event);
 
@@ -297,17 +333,17 @@ export class OOSSAwareSandboxAgent {
  * Create an OOSS-aware sandbox agent wrapper
  */
 export function createOOSSAwareSandboxAgent(
-  client: SandboxAgent,
+  client: OOSSCompatibleClient,
   config: OOSSClientConfig
 ): OOSSAwareSandboxAgent {
   return new OOSSAwareSandboxAgent(client, config);
 }
 
 /**
- * Wrap an existing SandboxAgent with OOSS integration
+ * Wrap an existing client with OOSS integration
  */
 export function wrapWithOOSS(
-  client: SandboxAgent,
+  client: OOSSCompatibleClient,
   oossContext: OOSSContext,
   options: {
     convex?: ConvexEventStreamConfig;

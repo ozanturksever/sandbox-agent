@@ -67,6 +67,7 @@ export type {
   OOSSEnrichedEvent,
   OOSSClientConfig,
   PermissionCheckResult,
+  UniversalEvent,
 } from './types.ts';
 
 export { PermissionDeniedError } from './types.ts';
@@ -97,4 +98,8 @@ export {
   OOSSAwareSandboxAgent,
   createOOSSAwareSandboxAgent,
   wrapWithOOSS,
+} from './ooss-client.ts';
+
+export type {
+  OOSSCompatibleClient,
 } from './ooss-client.ts';

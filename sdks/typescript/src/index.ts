@@ -56,6 +56,7 @@ export type {
   SessionRecord,
   SkillsConfig,
   SkillsConfigQuery,
+  UniversalEvent,
 } from "./types.ts";
 
 export type {

@@ -6,6 +6,7 @@
  */
 
 import type { UniversalEvent } from '../../types.ts';
+export type { UniversalEvent };
 
 /**
  * OOSS context included with events and sessions

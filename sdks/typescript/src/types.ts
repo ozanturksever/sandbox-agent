@@ -41,6 +41,16 @@ export interface SessionRecord {
   sessionInit?: Omit<NewSessionRequest, "_meta">;
 }
 
+export interface UniversalEvent {
+  id: string | number;
+  type: string;
+  timestamp: string;
+  sessionId?: string;
+  agent?: string;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
 export type SessionEventSender = "client" | "agent";
 
 export interface SessionEvent {
