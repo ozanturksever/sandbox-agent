@@ -23,6 +23,7 @@ pub enum AgentId {
     Amp,
     Pi,
     Cursor,
+    Codebuff,
     Mock,
 }
 
@@ -35,6 +36,7 @@ impl AgentId {
             AgentId::Amp => "amp",
             AgentId::Pi => "pi",
             AgentId::Cursor => "cursor",
+            AgentId::Codebuff => "codebuff",
             AgentId::Mock => "mock",
         }
     }
@@ -47,6 +49,7 @@ impl AgentId {
             AgentId::Amp => "amp",
             AgentId::Pi => "pi",
             AgentId::Cursor => "cursor-agent",
+            AgentId::Codebuff => "codebuff",
             AgentId::Mock => "mock",
         }
     }
@@ -59,6 +62,7 @@ impl AgentId {
             "amp" => Some(AgentId::Amp),
             "pi" => Some(AgentId::Pi),
             "cursor" => Some(AgentId::Cursor),
+            "codebuff" => Some(AgentId::Codebuff),
             "mock" => Some(AgentId::Mock),
             _ => None,
         }
@@ -72,6 +76,7 @@ impl AgentId {
             AgentId::Amp,
             AgentId::Pi,
             AgentId::Cursor,
+            AgentId::Codebuff,
             AgentId::Mock,
         ]
     }
@@ -84,6 +89,7 @@ impl AgentId {
             AgentId::Amp => Some("amp-acp"),
             AgentId::Pi => Some("pi-acp"),
             AgentId::Cursor => Some("cursor-agent-acp"),
+            AgentId::Codebuff => None,
             AgentId::Mock => None,
         }
     }
@@ -96,17 +102,18 @@ impl AgentId {
             AgentId::Amp => Some("amp-acp"),
             AgentId::Pi => Some("pi-acp"),
             AgentId::Cursor => Some("cursor-agent-acp"),
+            AgentId::Codebuff => Some("codebuff"),
             AgentId::Mock => None,
         }
     }
 
     fn native_required(self) -> bool {
-        matches!(self, AgentId::Claude | AgentId::Codex | AgentId::Opencode)
+        matches!(self, AgentId::Claude | AgentId::Codex | AgentId::Opencode | AgentId::Codebuff)
     }
 
     fn unstable_enabled(self) -> bool {
         // v1 profile includes unstable methods; support still depends on agent process capability.
-        !matches!(self, AgentId::Amp)
+        !matches!(self, AgentId::Amp | AgentId::Codebuff)
     }
 }
 
@@ -414,7 +421,7 @@ impl AgentManager {
         }
 
         if let Some(bin) = agent.agent_process_binary_hint().and_then(find_in_path) {
-            let args = if agent == AgentId::Opencode {
+            let args = if agent == AgentId::Opencode || agent == AgentId::Codebuff {
                 vec!["acp".to_string()]
             } else {
                 Vec::new()
@@ -429,6 +436,17 @@ impl AgentManager {
         }
 
         if agent == AgentId::Opencode {
+            let native = self.resolve_binary(agent)?;
+            return Ok(AgentProcessLaunchSpec {
+                program: native,
+                args: vec!["acp".to_string()],
+                env: HashMap::new(),
+                source: InstallSource::LocalPath,
+                version: None,
+            });
+        }
+
+        if agent == AgentId::Codebuff {
             let native = self.resolve_binary(agent)?;
             return Ok(AgentProcessLaunchSpec {
                 program: native,
@@ -467,6 +485,9 @@ impl AgentManager {
             }
             AgentId::Amp => install_amp(&path, self.platform, options.version.as_deref())?,
             AgentId::Pi | AgentId::Cursor => {
+                return Ok(None);
+            }
+            AgentId::Codebuff => {
                 return Ok(None);
             }
             AgentId::Mock => {
@@ -643,6 +664,15 @@ impl AgentManager {
                     options.agent_process_version.as_deref(),
                 );
                 write_npx_agent_process_launcher(&launcher, &package, &[], &HashMap::new())?;
+            }
+            AgentId::Codebuff => {
+                let native = self.resolve_binary(agent)?;
+                write_exec_agent_process_launcher(
+                    &launcher,
+                    &native,
+                    &["acp".to_string()],
+                    &HashMap::new(),
+                )?;
             }
             AgentId::Mock => {
                 write_mock_agent_process_launcher(&launcher)?;

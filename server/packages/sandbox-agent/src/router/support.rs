@@ -53,7 +53,7 @@ pub(super) fn credentials_available_for(
         AgentId::Claude | AgentId::Amp => has_anthropic,
         AgentId::Codex => has_openai,
         AgentId::Opencode => has_anthropic || has_openai,
-        AgentId::Pi | AgentId::Cursor => true,
+        AgentId::Pi | AgentId::Cursor | AgentId::Codebuff => true,
         AgentId::Mock => true,
     }
 }
@@ -125,6 +125,21 @@ pub(super) fn fallback_config_options(agent: AgentId) -> Vec<Value> {
                 { "value": "default", "name": "Default" }
             ]
         })],
+        AgentId::Codebuff => vec![
+            json!({
+                "id": "mode",
+                "name": "Mode",
+                "category": "mode",
+                "type": "select",
+                "currentValue": "DEFAULT",
+                "options": [
+                    { "value": "DEFAULT", "name": "Default" },
+                    { "value": "FREE", "name": "Free" },
+                    { "value": "MAX", "name": "Max" },
+                    { "value": "PLAN", "name": "Plan" }
+                ]
+            }),
+        ],
         AgentId::Mock => vec![json!({
             "id": "model",
             "name": "Model",
@@ -316,6 +331,26 @@ pub(super) fn agent_capabilities_for(agent: AgentId) -> AgentCapabilities {
             mcp_tools: false,
             streaming_deltas: true,
             item_started: true,
+            shared_process: false,
+        },
+        AgentId::Codebuff => AgentCapabilities {
+            plan_mode: true,
+            permissions: false,
+            questions: false,
+            tool_calls: true,
+            tool_results: true,
+            text_messages: true,
+            images: false,
+            file_attachments: false,
+            session_lifecycle: true,
+            error_events: true,
+            reasoning: false,
+            status: false,
+            command_execution: false,
+            file_changes: false,
+            mcp_tools: false,
+            streaming_deltas: true,
+            item_started: false,
             shared_process: false,
         },
         AgentId::Mock => AgentCapabilities {
@@ -522,6 +557,7 @@ pub(super) fn build_provider_payload_for_opencode(_state: &Arc<AppState>) -> Val
         AgentId::Opencode,
         AgentId::Pi,
         AgentId::Cursor,
+        AgentId::Codebuff,
     ];
 
     let has_anthropic = std::env::var("ANTHROPIC_API_KEY").is_ok();
@@ -607,6 +643,7 @@ fn agent_display_name(agent: AgentId) -> &'static str {
         AgentId::Opencode => "OpenCode",
         AgentId::Pi => "Pi",
         AgentId::Cursor => "Cursor Agent",
+        AgentId::Codebuff => "Codebuff",
     }
 }
 
