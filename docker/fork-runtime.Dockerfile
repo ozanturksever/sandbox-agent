@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     git && \
     rm -rf /var/lib/apt/lists/*
 
-COPY dist/sandbox-agent /usr/local/bin/sandbox-agent
+COPY .fork-docker/sandbox-agent /usr/local/bin/sandbox-agent
 RUN chmod +x /usr/local/bin/sandbox-agent
 
 RUN useradd -m -s /bin/bash sandbox
