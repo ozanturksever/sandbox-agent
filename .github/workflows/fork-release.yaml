@@ -29,6 +29,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm64
           - target: x86_64-apple-darwin
             runner: macos-latest
           - target: aarch64-apple-darwin
@@ -39,7 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- Linux & Windows: use Docker cross-compilation ---
+      # --- Linux & Windows: use Docker compilation ---
+      # arm64 builds run natively on ubuntu-24.04-arm64 (no QEMU needed)
       - name: Build via Docker (Linux/Windows)
         if: runner.os == 'Linux'
         run: |
@@ -88,7 +91,7 @@ jobs:
           path: dist/*
 
   # ===========================================================================
-  # Build & push Docker images from pre-compiled Linux binaries
+  # Build & push multi-arch Docker images from pre-compiled Linux binaries
   # ===========================================================================
   docker:
     name: "Docker ${{ matrix.variant }}"
@@ -110,17 +113,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Linux binary
-        uses: actions/download-artifact@v4
-        with:
-          name: binaries-x86_64-unknown-linux-musl
-          path: dist
-
-      - name: Prepare binary
-        run: |
-          chmod +x dist/sandbox-agent-x86_64-unknown-linux-musl
-          mkdir -p .fork-docker
-          cp dist/sandbox-agent-x86_64-unknown-linux-musl .fork-docker/sandbox-agent
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -132,24 +126,50 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
+      # Download both arch binaries
+      - name: Download amd64 binary
+        uses: actions/download-artifact@v4
         with:
-          images: ${{ env.DOCKER_IMAGE }}${{ matrix.suffix }}
-          tags: |
-            type=raw,value=${{ inputs.tag }}
-            type=raw,value=latest
+          name: binaries-x86_64-unknown-linux-musl
+          path: dist-amd64
 
-      - name: Build & push
-        uses: docker/build-push-action@v5
+      - name: Download arm64 binary
+        uses: actions/download-artifact@v4
         with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64
+          name: binaries-aarch64-unknown-linux-musl
+          path: dist-arm64
+
+      # Build and push per-arch images
+      - name: Build & push amd64
+        run: |
+          mkdir -p .fork-docker
+          cp dist-amd64/sandbox-agent-x86_64-unknown-linux-musl .fork-docker/sandbox-agent
+          chmod +x .fork-docker/sandbox-agent
+          docker buildx build --platform linux/amd64 \
+            -t "${{ env.DOCKER_IMAGE }}${{ matrix.suffix }}:${{ inputs.tag }}-amd64" \
+            --push \
+            -f ${{ matrix.dockerfile }} .
+          rm -rf .fork-docker
+
+      - name: Build & push arm64
+        run: |
+          mkdir -p .fork-docker
+          cp dist-arm64/sandbox-agent-aarch64-unknown-linux-musl .fork-docker/sandbox-agent
+          chmod +x .fork-docker/sandbox-agent
+          docker buildx build --platform linux/arm64 \
+            -t "${{ env.DOCKER_IMAGE }}${{ matrix.suffix }}:${{ inputs.tag }}-arm64" \
+            --push \
+            -f ${{ matrix.dockerfile }} .
+          rm -rf .fork-docker
+
+      # Create multi-arch manifest combining both platforms
+      - name: Create multi-arch manifest
+        run: |
+          docker buildx imagetools create \
+            -t "${{ env.DOCKER_IMAGE }}${{ matrix.suffix }}:${{ inputs.tag }}" \
+            -t "${{ env.DOCKER_IMAGE }}${{ matrix.suffix }}:latest" \
+            "${{ env.DOCKER_IMAGE }}${{ matrix.suffix }}:${{ inputs.tag }}-amd64" \
+            "${{ env.DOCKER_IMAGE }}${{ matrix.suffix }}:${{ inputs.tag }}-arm64"
 
   # ===========================================================================
   # Create GitHub Release with all binaries
@@ -184,7 +204,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          DOCKER_NOTE="**Docker images:**"
+          DOCKER_NOTE="**Docker images (multi-arch: amd64 + arm64):**"
           DOCKER_NOTE="${DOCKER_NOTE}
           \`\`\`bash
           # Runtime (with git, curl, ca-certs)
