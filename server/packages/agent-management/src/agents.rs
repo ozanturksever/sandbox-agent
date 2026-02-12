@@ -488,7 +488,7 @@ impl AgentManager {
                 return Ok(None);
             }
             AgentId::Codebuff => {
-                return Ok(None);
+                install_codebuff(&path, self.platform, options.version.as_deref())?
             }
             AgentId::Mock => {
                 write_text_file(&path, "#!/usr/bin/env sh\nexit 0\n")?;
@@ -1183,6 +1183,45 @@ fn install_opencode(
             Ok(())
         }
     }
+}
+
+fn install_codebuff(
+    path: &Path,
+    platform: Platform,
+    version: Option<&str>,
+) -> Result<(), AgentError> {
+    let platform_segment = match platform {
+        Platform::LinuxX64 | Platform::LinuxX64Musl => "linux-x64",
+        Platform::LinuxArm64 => "linux-arm64",
+        Platform::MacosArm64 => "darwin-arm64",
+        Platform::MacosX64 => "darwin-x64",
+        Platform::WindowsX64 | Platform::WindowsArm64 => {
+            return Err(AgentError::UnsupportedPlatform {
+                os: "windows".to_string(),
+                arch: "x64".to_string(),
+            });
+        }
+    };
+
+    let url = match version {
+        Some(version) => Url::parse(&format!(
+            "https://github.com/ozanturksever/codebuff/releases/download/{version}/codebuff-{platform_segment}.tar.gz"
+        ))?,
+        None => Url::parse(&format!(
+            "https://github.com/ozanturksever/codebuff/releases/latest/download/codebuff-{platform_segment}.tar.gz"
+        ))?,
+    };
+
+    let bytes = download_bytes(&url)?;
+    let temp_dir = tempfile::tempdir()?;
+    let cursor = io::Cursor::new(bytes);
+    let mut archive = tar::Archive::new(GzDecoder::new(cursor));
+    archive.unpack(temp_dir.path())?;
+
+    let binary = find_file_recursive(temp_dir.path(), "codebuff")?
+        .ok_or_else(|| AgentError::ExtractFailed("missing codebuff binary".to_string()))?;
+    move_executable(&binary, path)?;
+    Ok(())
 }
 
 fn install_zip_binary(path: &Path, url: &Url, binary_name: &str) -> Result<(), AgentError> {
