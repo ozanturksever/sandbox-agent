@@ -5,7 +5,7 @@
 <h3 align="center">Run Coding Agents in Sandboxes. Control Them Over HTTP.</h3>
 
 <p align="center">
-  A server that runs inside your sandbox. Your app connects remotely to control Claude Code, Codex, OpenCode, Cursor, Amp, or Pi — streaming events, handling permissions, managing sessions.
+  A server that runs inside your sandbox. Your app connects remotely to control Claude Code, Codex, OpenCode, Cursor, Amp, Pi, or Codebuff — streaming events, handling permissions, managing sessions.
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@ Sandbox Agent solves three problems:
 
 ## Features
 
-- **Universal Agent API**: Single interface to control Claude Code, Codex, OpenCode, Cursor, Amp, and Pi with full feature coverage
+- **Universal Agent API**: Single interface to control Claude Code, Codex, OpenCode, Cursor, Amp, Pi, and Codebuff with full feature coverage
 - **Universal Session Schema**: Standardized schema that normalizes all agent event formats for storage and replay
 - **Runs Inside Any Sandbox**: Lightweight static Rust binary. One curl command to install inside E2B, Daytona, Vercel Sandboxes, or Docker
 - **Server or SDK Mode**: Run as an HTTP server or embed with the TypeScript SDK
@@ -56,6 +56,12 @@ The Sandbox Agent acts as a universal adapter between your client application an
 | **SDK** | TypeScript client with embedded and server modes |
 | **Inspector** | Built-in UI at inspecting sessions and events |
 | **CLI** | `sandbox-agent` (same binary, plus npm wrapper) mirrors the HTTP endpoints |
+
+> **Fork install (precompiled binaries):**
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/ozanturksever/sandbox-agent/main/install.sh | bash
+> ```
+> Options: `--version v0.2.0-fork.1`, `--dir /usr/local/bin`, `--gigacode`. See [install.sh](./install.sh).
 
 ## Get Started
 
@@ -136,6 +142,24 @@ for await (const event of client.streamEvents("demo", { offset: 0 })) {
 
 Run as an HTTP server and connect from any language. Deploy to E2B, Daytona, Vercel, or your own infrastructure.
 
+**Install from this fork (precompiled binaries for Linux x86_64, macOS x86_64/arm64, Windows x86_64):**
+
+```bash
+# Install latest release
+curl -fsSL https://raw.githubusercontent.com/ozanturksever/sandbox-agent/main/install.sh | bash
+
+# Install specific version
+curl -fsSL https://raw.githubusercontent.com/ozanturksever/sandbox-agent/main/install.sh | bash -s -- --version v0.2.0-fork.1
+
+# Install to /usr/local/bin (may need sudo)
+curl -fsSL https://raw.githubusercontent.com/ozanturksever/sandbox-agent/main/install.sh | bash -s -- --dir /usr/local/bin
+
+# Install gigacode binary
+curl -fsSL https://raw.githubusercontent.com/ozanturksever/sandbox-agent/main/install.sh | bash -s -- --gigacode
+```
+
+**Install from upstream:**
+
 ```bash
 # Install it
 curl -fsSL https://releases.rivet.dev/sandbox-agent/0.2.x/install.sh | sh
@@ -150,6 +174,7 @@ sandbox-agent install-agent claude
 sandbox-agent install-agent codex
 sandbox-agent install-agent opencode
 sandbox-agent install-agent amp
+sandbox-agent install-agent codebuff
 ```
 
 To disable auth locally:
@@ -227,7 +252,7 @@ No, they're complementary. AI SDK is for building chat interfaces and calling LL
 <details>
 <summary><strong>Which coding agents are supported?</strong></summary>
 
-Claude Code, Codex, OpenCode, Cursor, Amp, and Pi. The SDK normalizes their APIs so you can swap between them without changing your code.
+Claude Code, Codex, OpenCode, Cursor, Amp, Pi, and Codebuff. The SDK normalizes their APIs so you can swap between them without changing your code. See [AGENTSTATUSREPORT.md](./AGENTSTATUSREPORT.md) for a detailed comparison of capabilities per agent.
 </details>
 
 <details>
